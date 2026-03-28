@@ -59,7 +59,7 @@ int main(int argc, char **argv) {
     printf("Compressing...\n");
 
     clock_t t0 = clock();
-    int rc = cq_compress(input, (size_t)fsize, fmt,
+    int rc = cq_compress(input, (size_t)fsize, fmt, NULL,
                          out_buf, (size_t)fsize + 4096,
                          dict_buf, 262144,
                          &dict, &res);

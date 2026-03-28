@@ -14,7 +14,7 @@ static void roundtrip_check(const char *input, size_t input_len,
     char out[32768] = {0}, dict[8192] = {0}, exp[32768] = {0};
     cq_dict_t d; cq_result_t r; size_t elen = 0;
 
-    int rc = cq_compress(input, input_len, fmt,
+    int rc = cq_compress(input, input_len, fmt, NULL,
                          out, sizeof(out), dict, sizeof(dict), &d, &r);
     assert(rc == 0);
 
@@ -53,7 +53,7 @@ static void test_json(void)
     const char *solo = "{\"a\":\"b\",\"c\":\"d\",\"e\":\"f\"}";
     char out[4096] = {0}, dict[4096] = {0};
     cq_dict_t d; cq_result_t r;
-    int rc = cq_compress(solo, strlen(solo), CQ_FMT_JSON,
+    int rc = cq_compress(solo, strlen(solo), CQ_FMT_JSON, NULL,
                          out, sizeof(out), dict, sizeof(dict), &d, &r);
     assert(rc == 0 && r.symbol_count == 0 && strcmp(solo, out) == 0);
     printf("[passthrough] symbols=0  round-trip=PASS\n");

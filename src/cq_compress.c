@@ -5,6 +5,58 @@
 #include <stdio.h>
 #include <ctype.h>
 
+/* -----------------------------------------------------------------------
+ * Shared helpers for intent-aware rewriting
+ * ----------------------------------------------------------------------- */
+static int intent_key_match_rw(const char * const *keys, int count,
+                                const char *text, size_t len)
+{
+    if (!keys || count <= 0) return 0;
+    for (int i = 0; i < count; i++) {
+        if (keys[i] && strlen(keys[i]) == len &&
+            memcmp(keys[i], text, len) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Skip past a single JSON value (string, number, bool, object, array).
+ * Returns the position immediately after the value.                      */
+static size_t skip_json_value_rw(const char *input, size_t input_len, size_t pos)
+{
+    while (pos < input_len && (input[pos] == ' ' || input[pos] == '\t')) pos++;
+    if (pos >= input_len) return pos;
+    char ch = input[pos];
+    if (ch == '"') {
+        pos++;
+        while (pos < input_len) {
+            if (input[pos] == '\\') { pos += 2; continue; }
+            if (input[pos] == '"') { pos++; break; }
+            pos++;
+        }
+    } else if (ch == '{' || ch == '[') {
+        char close = (ch == '{') ? '}' : ']';
+        int depth = 1; pos++;
+        while (pos < input_len && depth > 0) {
+            if (input[pos] == '"') {
+                pos++;
+                while (pos < input_len) {
+                    if (input[pos] == '\\') { pos += 2; continue; }
+                    if (input[pos] == '"') { pos++; break; }
+                    pos++;
+                }
+                continue;
+            }
+            if (input[pos] == '{' || input[pos] == '[') depth++;
+            if (input[pos] == close) depth--;
+            pos++;
+        }
+    } else {
+        while (pos < input_len && input[pos] != ',' && input[pos] != '}'
+               && input[pos] != ']' && input[pos] != '\n') pos++;
+    }
+    return pos;
+}
+
 /* ============================================================================
  * Format-specific rewrite passes
  *
@@ -28,7 +80,7 @@ static int emit_symbol(int sym, char *out_buf, size_t out_buf_size, size_t *pos)
  * when the string content is in the dictionary.  Everything else is copied.
  * -------------------------------------------------------------------------- */
 static int rewrite_json(const char *input, size_t input_len,
-                        const cq_dict_t *dict,
+                        const cq_dict_t *dict, const cq_intent_t *intent,
                         char *out_buf, size_t out_buf_size,
                         size_t *out_pos)
 {
@@ -45,6 +97,31 @@ static int rewrite_json(const char *input, size_t input_len,
                 j++;
             }
             if (j < input_len) {
+                /* Check if this is a drop_key — if so, remove the whole pair */
+                if (intent && intent->drop_keys) {
+                    size_t k = j + 1;
+                    while (k < input_len && (input[k]==' ' || input[k]=='\t')) k++;
+                    if (k < input_len && input[k] == ':' &&
+                        intent_key_match_rw(intent->drop_keys, intent->drop_count,
+                                            input + str_start, j - str_start)) {
+                        /* Skip:  "key" : <value> [,\s*] */
+                        k++; /* past ':' */
+                        k = skip_json_value_rw(input, input_len, k);
+                        /* Consume trailing comma + whitespace */
+                        while (k < input_len &&
+                               (input[k]==' ' || input[k]=='\t' ||
+                                input[k]=='\n' || input[k]=='\r')) k++;
+                        if (k < input_len && input[k] == ',') {
+                            k++;
+                            while (k < input_len &&
+                                   (input[k]==' ' || input[k]=='\t' ||
+                                    input[k]=='\n' || input[k]=='\r')) k++;
+                        }
+                        in_pos = k;
+                        continue;
+                    }
+                }
+
                 int sym = cq_dict_lookup(dict, input + str_start, j - str_start);
                 if (sym >= 0) {
                     if (emit_symbol(sym, out_buf, out_buf_size, out_pos) != 0) return -1;
@@ -68,7 +145,7 @@ static int rewrite_json(const char *input, size_t input_len,
  * Delimiters (commas, newlines) and non-matching fields are copied verbatim.
  * -------------------------------------------------------------------------- */
 static int rewrite_csv(const char *input, size_t input_len,
-                       const cq_dict_t *dict,
+                       const cq_dict_t *dict, const cq_intent_t *intent,
                        char *out_buf, size_t out_buf_size,
                        size_t *out_pos)
 {
@@ -127,6 +204,7 @@ static int rewrite_csv(const char *input, size_t input_len,
         out_buf[(*out_pos)++] = ch;
         i++;
     }
+    (void)intent;
     return 0;
 }
 
@@ -150,7 +228,7 @@ static int is_token_char(char c)
 }
 
 static int rewrite_log(const char *input, size_t input_len,
-                       const cq_dict_t *dict,
+                       const cq_dict_t *dict, const cq_intent_t *intent,
                        char *out_buf, size_t out_buf_size,
                        size_t *out_pos)
 {
@@ -190,6 +268,7 @@ static int rewrite_log(const char *input, size_t input_len,
         }
         i = span_end;
     }
+    (void)intent;
     return 0;
 }
 
@@ -199,7 +278,7 @@ static int rewrite_log(const char *input, size_t input_len,
  * Replaces string literals and long identifiers with ^N when in dict.
  * -------------------------------------------------------------------------- */
 static int rewrite_code(const char *input, size_t input_len,
-                        const cq_dict_t *dict,
+                        const cq_dict_t *dict, const cq_intent_t *intent,
                         char *out_buf, size_t out_buf_size,
                         size_t *out_pos)
 {
@@ -251,6 +330,7 @@ static int rewrite_code(const char *input, size_t input_len,
         out_buf[(*out_pos)++] = ch;
         i++;
     }
+    (void)intent;
     return 0;
 }
 
@@ -258,6 +338,7 @@ static int rewrite_code(const char *input, size_t input_len,
  * Dispatch table
  * -------------------------------------------------------------------------- */
 typedef int (*rewrite_fn)(const char *, size_t, const cq_dict_t *,
+                          const cq_intent_t *,
                           char *, size_t, size_t *);
 
 static const rewrite_fn rewriters[CQ_FMT_COUNT] = {
@@ -271,29 +352,31 @@ static const rewrite_fn rewriters[CQ_FMT_COUNT] = {
  * Public API
  * ============================================================================ */
 
-int cq_compress(const char  *input,
-                size_t       input_len,
-                cq_format_t  fmt,
-                char        *out_buf,
-                size_t       out_buf_size,
-                char        *dict_buf,
-                size_t       dict_buf_size,
-                cq_dict_t   *dict_out,
-                cq_result_t *result)
+int cq_compress(const char        *input,
+                size_t             input_len,
+                cq_format_t        fmt,
+                const cq_intent_t *intent,
+                char              *out_buf,
+                size_t             out_buf_size,
+                char              *dict_buf,
+                size_t             dict_buf_size,
+                cq_dict_t         *dict_out,
+                cq_result_t       *result)
 {
     if (!input || !out_buf || !dict_buf || !dict_out || !result) return -1;
     if (out_buf_size < 2 || dict_buf_size < 2) return -1;
     if (fmt < 0 || fmt >= CQ_FMT_COUNT) fmt = CQ_FMT_JSON;
 
     cq_candidate_list_t candidates;
-    if (cq_ngram_scan(input, input_len, fmt, &candidates) < 0) return -1;
+    if (cq_ngram_scan(input, input_len, fmt, intent, &candidates) < 0) return -1;
     if (cq_dict_build(&candidates, dict_out) < 0) return -1;
 
     int dict_len = cq_dict_render(dict_out, dict_buf, dict_buf_size);
     if (dict_len < 0) return -1;
 
     size_t out_pos = 0;
-    if (rewriters[fmt](input, input_len, dict_out, out_buf, out_buf_size, &out_pos) != 0)
+    if (rewriters[fmt](input, input_len, dict_out, intent,
+                       out_buf, out_buf_size, &out_pos) != 0)
         return -1;
 
     out_buf[out_pos] = '\0';

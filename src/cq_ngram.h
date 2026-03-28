@@ -36,10 +36,11 @@ typedef struct {
  * Scan `input` for the given format and populate `out` with candidates
  * sorted by net_saving descending.
  *
+ * `intent` is optional (pass NULL for default behaviour).
  * Returns the number of candidates found, or -1 on error.
  */
 int cq_ngram_scan(const char *input, size_t input_len,
-                  cq_format_t fmt,
+                  cq_format_t fmt, const cq_intent_t *intent,
                   cq_candidate_list_t *out);
 
 /*

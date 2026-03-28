@@ -23,18 +23,20 @@ typedef struct {
 /*
  * Compress a payload of the given format.
  *
+ * `intent` is optional (pass NULL for default behaviour).
  * Thread safety: fully stateless — safe to call concurrently.
  * Returns 0 on success, -1 on error.
  */
-int cq_compress(const char  *input,
-                size_t       input_len,
-                cq_format_t  fmt,
-                char        *out_buf,
-                size_t       out_buf_size,
-                char        *dict_buf,
-                size_t       dict_buf_size,
-                cq_dict_t   *dict_out,
-                cq_result_t *result);
+int cq_compress(const char        *input,
+                size_t             input_len,
+                cq_format_t        fmt,
+                const cq_intent_t *intent,
+                char              *out_buf,
+                size_t             out_buf_size,
+                char              *dict_buf,
+                size_t             dict_buf_size,
+                cq_dict_t         *dict_out,
+                cq_result_t       *result);
 
 /*
  * Re-expand a compressed payload back to the original.
