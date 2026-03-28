@@ -13,10 +13,11 @@ int cq_dict_build(const cq_candidate_list_t *list, cq_dict_t *dict)
 
     for (size_t i = 0; i < limit; i++) {
         cq_symbol_t *s = &dict->entries[i];
-        s->symbol_id = (int)i;
+        s->symbol_id    = (int)i;
         memcpy(s->original, list->items[i].text, list->items[i].length);
         s->original[list->items[i].length] = '\0';
         s->original_len = list->items[i].length;
+        s->quoted       = list->items[i].quoted;
     }
     dict->count = limit;
 

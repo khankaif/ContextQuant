@@ -2,6 +2,7 @@
 massive_payload.json
 payloads/
 *.payload.json
+*.json
 
 # Local build outputs
 contextquant_cli
@@ -31,3 +32,6 @@ coverage/
 # Editor files
 .vscode/
 .idea/
+
+test_runner
+synthetic_json_gen

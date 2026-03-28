@@ -24,6 +24,7 @@ typedef struct {
     int    symbol_id;                  /* 0-based index → symbol "^0", "^1", … */
     char   original[CQ_MAX_TOKEN_LEN]; /* the string this symbol replaces      */
     size_t original_len;
+    int    quoted;                     /* 1 = re-wrap with '"' on expansion     */
 } cq_symbol_t;
 
 typedef struct {

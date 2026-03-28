@@ -45,7 +45,7 @@ static void test_basic_json(void)
     cq_dict_t    dict;
     cq_result_t  result;
 
-    int rc = cq_compress(input, input_len,
+    int rc = cq_compress(input, input_len, CQ_FMT_JSON,
                          out_buf, sizeof(out_buf),
                          dict_buf, sizeof(dict_buf),
                          &dict, &result);
@@ -81,7 +81,7 @@ static void test_roundtrip(void)
     cq_dict_t    dict;
     cq_result_t  result;
 
-    int rc = cq_compress(input, input_len,
+    int rc = cq_compress(input, input_len, CQ_FMT_JSON,
                          out_buf, sizeof(out_buf),
                          dict_buf, sizeof(dict_buf),
                          &dict, &result);
@@ -90,7 +90,7 @@ static void test_roundtrip(void)
     char expanded[4096] = {0};
     size_t expanded_len = 0;
     rc = cq_expand(out_buf, result.compressed_len,
-                   &dict,
+                   CQ_FMT_JSON, &dict,
                    expanded, sizeof(expanded),
                    &expanded_len);
     assert(rc == 0 && "cq_expand failed");
@@ -116,7 +116,7 @@ static void test_no_candidates(void)
     cq_dict_t    dict;
     cq_result_t  result;
 
-    int rc = cq_compress(input, input_len,
+    int rc = cq_compress(input, input_len, CQ_FMT_JSON,
                          out_buf, sizeof(out_buf),
                          dict_buf, sizeof(dict_buf),
                          &dict, &result);
