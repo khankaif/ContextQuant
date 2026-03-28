@@ -1,0 +1,33 @@
+# Large local payloads
+massive_payload.json
+payloads/
+*.payload.json
+
+# Local build outputs
+contextquant_cli
+test_runner
+build/
+dist/
+*.out
+*.o
+*.obj
+*.d
+*.a
+*.so
+*.dylib
+
+# Coverage / profiling
+*.gcno
+*.gcda
+*.profraw
+*.profdata
+coverage/
+
+# Temp files
+*.log
+*.tmp
+.DS_Store
+
+# Editor files
+.vscode/
+.idea/

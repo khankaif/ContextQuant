@@ -18,7 +18,7 @@
  *   - Easy to regex-replace during re-expansion
  */
 
-#define CQ_MAX_SYMBOLS 64   /* hard cap; keeps dictionary block small */
+#define CQ_MAX_SYMBOLS 128  /* hard cap; keeps dictionary block manageable */
 
 typedef struct {
     int    symbol_id;                  /* 0-based index → symbol "^0", "^1", … */
