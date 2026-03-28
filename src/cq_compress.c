@@ -90,7 +90,13 @@ static int rewrite_csv(const char *input, size_t input_len,
                 i = j + 1;
                 continue;
             }
-            /* No match — copy verbatim including the opening quote */
+            /* No match — copy entire quoted field verbatim */
+            size_t span = (j < input_len ? j + 1 : input_len) - i;
+            if (*out_pos + span >= out_buf_size) return -1;
+            memcpy(out_buf + *out_pos, input + i, span);
+            *out_pos += span;
+            i += span;
+            continue;
         } else if (ch != ',' && ch != '\n' && ch != '\r') {
             /* Unquoted field — find end */
             size_t start = i;
@@ -127,9 +133,22 @@ static int rewrite_csv(const char *input, size_t input_len,
 /* --------------------------------------------------------------------------
  * LOG rewriter
  *
- * Replaces whitespace-delimited tokens with ^N when found in dict.
- * All other characters (spaces, punctuation, newlines) are copied verbatim.
+ * Mirrors the extract_log tokenisation exactly so the same token boundaries
+ * are seen during compression as during frequency analysis:
+ *
+ *   1. Leading non-alnum/non-special characters within a whitespace span
+ *      are copied verbatim (e.g. the '[' in "[2026-03-29").
+ *   2. The remaining content of the span is looked up in the dict.
+ *   3. On a hit the symbol is emitted; on a miss the content is copied.
+ *
+ * Special chars kept inside a token (matching extract_log): _ . - / :
  * -------------------------------------------------------------------------- */
+static int is_token_char(char c)
+{
+    return isalnum((unsigned char)c) || c == '_' || c == '.' ||
+           c == '-' || c == '/' || c == ':';
+}
+
 static int rewrite_log(const char *input, size_t input_len,
                        const cq_dict_t *dict,
                        char *out_buf, size_t out_buf_size,
@@ -137,23 +156,39 @@ static int rewrite_log(const char *input, size_t input_len,
 {
     size_t i = 0;
     while (i < input_len) {
-        /* Collect a token: run of non-whitespace chars */
-        if (!isspace((unsigned char)input[i])) {
-            size_t start = i;
-            while (i < input_len && !isspace((unsigned char)input[i])) i++;
-            size_t len = i - start;
-            int sym = cq_dict_lookup(dict, input + start, len);
-            if (sym >= 0) {
-                if (emit_symbol(sym, out_buf, out_buf_size, out_pos) != 0) return -1;
-            } else {
-                if (*out_pos + len >= out_buf_size) return -1;
-                memcpy(out_buf + *out_pos, input + start, len);
-                *out_pos += len;
-            }
-        } else {
+        if (isspace((unsigned char)input[i])) {
             if (*out_pos + 1 >= out_buf_size) return -1;
             out_buf[(*out_pos)++] = input[i++];
+            continue;
         }
+
+        /* Within a whitespace span: copy leading punctuation verbatim */
+        size_t span_end = i;
+        while (span_end < input_len && !isspace((unsigned char)input[span_end])) span_end++;
+
+        size_t lead = i;
+        while (lead < span_end && !is_token_char(input[lead])) lead++;
+
+        /* Copy any leading punctuation verbatim */
+        if (lead > i) {
+            if (*out_pos + (lead - i) >= out_buf_size) return -1;
+            memcpy(out_buf + *out_pos, input + i, lead - i);
+            *out_pos += lead - i;
+        }
+
+        if (lead == span_end) { i = span_end; continue; }   /* all punct span */
+
+        /* Token content: from lead to span_end */
+        size_t content_len = span_end - lead;
+        int sym = cq_dict_lookup(dict, input + lead, content_len);
+        if (sym >= 0) {
+            if (emit_symbol(sym, out_buf, out_buf_size, out_pos) != 0) return -1;
+        } else {
+            if (*out_pos + content_len >= out_buf_size) return -1;
+            memcpy(out_buf + *out_pos, input + lead, content_len);
+            *out_pos += content_len;
+        }
+        i = span_end;
     }
     return 0;
 }

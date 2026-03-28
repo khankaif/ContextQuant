@@ -44,7 +44,7 @@ int main(int argc, char **argv) {
     fclose(f);
 
     char *out_buf  = malloc((size_t)fsize + 4096);
-    char *dict_buf = malloc(65536);   /* 64 KB — enough for 128 symbols */
+    char *dict_buf = malloc(262144);  /* 256 KB — covers 256 symbols safely */
     cq_dict_t   dict;
     cq_result_t res;
 
@@ -61,7 +61,7 @@ int main(int argc, char **argv) {
     clock_t t0 = clock();
     int rc = cq_compress(input, (size_t)fsize, fmt,
                          out_buf, (size_t)fsize + 4096,
-                         dict_buf, 65536,
+                         dict_buf, 262144,
                          &dict, &res);
     clock_t t1 = clock();
 

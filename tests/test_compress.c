@@ -6,140 +6,156 @@
 
 /* ------------------------------------------------------------------ helpers */
 
-static void print_section(const char *title) {
-    printf("\n=== %s ===\n", title);
+static void section(const char *t) { printf("\n=== %s ===\n", t); }
+
+static void roundtrip_check(const char *input, size_t input_len,
+                            cq_format_t fmt, const char *label)
+{
+    char out[32768] = {0}, dict[8192] = {0}, exp[32768] = {0};
+    cq_dict_t d; cq_result_t r; size_t elen = 0;
+
+    int rc = cq_compress(input, input_len, fmt,
+                         out, sizeof(out), dict, sizeof(dict), &d, &r);
+    assert(rc == 0);
+
+    rc = cq_expand(out, r.compressed_len, fmt, &d, exp, sizeof(exp), &elen);
+    assert(rc == 0);
+
+    int match = (elen == input_len && memcmp(exp, input, input_len) == 0);
+
+    long saved = (long)r.input_tokens - (long)r.output_tokens;
+    int  pct   = r.input_tokens ? (int)(saved * 100 / (long)r.input_tokens) : 0;
+
+    printf("[%s] symbols=%d  saving=%d%%  round-trip=%s\n",
+           label, r.symbol_count, pct, match ? "PASS" : "FAIL");
+    assert(match && "round-trip mismatch");
 }
 
-/* ------------------------------------------------------------------ tests   */
+/* ------------------------------------------------------------------ JSON    */
 
-static void test_basic_json(void)
+static void test_json(void)
 {
-    print_section("Basic JSON compression");
+    section("JSON");
 
-    /*
-     * Simulate a Stripe-style batch payload: 20 charge objects.
-     * Keys "object", "status", "succeeded", "currency", "usd" repeat heavily —
-     * exactly the pattern that appears in real API response arrays.
-     */
+    /* 20 repeated Stripe-style charge objects */
     const char *row =
         "{\"object\":\"charge\",\"status\":\"succeeded\","
         "\"paid\":true,\"currency\":\"usd\",\"amount\":1000},";
+    char buf[8192] = "[";
+    size_t p = 1;
+    for (int i = 0; i < 20; i++) { size_t n = strlen(row); memcpy(buf+p, row, n); p += n; }
+    if (buf[p-1] == ',') p--;
+    buf[p++] = ']'; buf[p] = '\0';
 
-    /* Build a repeated payload */
-    char big_input[8192] = "[";
-    size_t pos = 1;
-    for (int i = 0; i < 20 && pos + strlen(row) + 2 < sizeof(big_input); i++) {
-        memcpy(big_input + pos, row, strlen(row));
-        pos += strlen(row);
-    }
-    /* overwrite trailing comma with ] */
-    if (big_input[pos - 1] == ',') pos--;
-    big_input[pos++] = ']';
-    big_input[pos]   = '\0';
+    roundtrip_check(buf, p, CQ_FMT_JSON, "batch charges");
 
-    const char *input    = big_input;
-    size_t      input_len = pos;
-
-    char out_buf[4096]  = {0};
-    char dict_buf[4096] = {0};
-    cq_dict_t    dict;
-    cq_result_t  result;
-
-    int rc = cq_compress(input, input_len, CQ_FMT_JSON,
-                         out_buf, sizeof(out_buf),
-                         dict_buf, sizeof(dict_buf),
-                         &dict, &result);
-
-    assert(rc == 0 && "cq_compress failed");
-
-    printf("Input  (%zu bytes, ~%zu tokens):\n  %s\n",
-           input_len, result.input_tokens, input);
-    printf("\nDictionary block:\n%s", dict_buf);
-    printf("\nCompressed (%zu bytes, ~%zu tokens):\n  %s\n",
-           result.compressed_len, result.output_tokens, out_buf);
-
-    long saved = (long)result.input_tokens - (long)result.output_tokens;
-    int  pct   = (result.input_tokens > 0)
-                 ? (int)(saved * 100 / (long)result.input_tokens)
-                 : 0;
-    printf("\nToken saving: %ld tokens (%d%%)\n", saved, pct);
-    printf("Symbols used: %d\n", result.symbol_count);
+    /* Passthrough: no repeated strings */
+    const char *solo = "{\"a\":\"b\",\"c\":\"d\",\"e\":\"f\"}";
+    char out[4096] = {0}, dict[4096] = {0};
+    cq_dict_t d; cq_result_t r;
+    int rc = cq_compress(solo, strlen(solo), CQ_FMT_JSON,
+                         out, sizeof(out), dict, sizeof(dict), &d, &r);
+    assert(rc == 0 && r.symbol_count == 0 && strcmp(solo, out) == 0);
+    printf("[passthrough] symbols=0  round-trip=PASS\n");
 }
 
-static void test_roundtrip(void)
+/* ------------------------------------------------------------------ CSV     */
+
+static void test_csv(void)
 {
-    print_section("Round-trip (compress → expand)");
+    section("CSV");
 
-    const char *input =
-        "{\"status\":\"succeeded\",\"status\":\"succeeded\","
-        "\"currency\":\"usd\",\"currency\":\"usd\",\"currency\":\"usd\"}";
+    /* 15 rows, repeated columns values */
+    const char *csv =
+        "txn_id,status,currency,gateway,amount\n"
+        "TXN_001,PENDING,USD,STRIPE,100.00\n"
+        "TXN_002,COMPLETED,USD,STRIPE,250.00\n"
+        "TXN_003,PENDING,EUR,PAYPAL,75.50\n"
+        "TXN_004,COMPLETED,USD,STRIPE,180.00\n"
+        "TXN_005,PENDING,USD,STRIPE,320.00\n"
+        "TXN_006,COMPLETED,EUR,PAYPAL,90.00\n"
+        "TXN_007,PENDING,USD,STRIPE,445.00\n"
+        "TXN_008,COMPLETED,USD,STRIPE,60.00\n"
+        "TXN_009,PENDING,EUR,PAYPAL,210.00\n"
+        "TXN_010,COMPLETED,USD,STRIPE,130.00\n"
+        "TXN_011,PENDING,USD,STRIPE,520.00\n"
+        "TXN_012,COMPLETED,EUR,PAYPAL,88.00\n"
+        "TXN_013,PENDING,USD,STRIPE,940.00\n"
+        "TXN_014,COMPLETED,USD,STRIPE,77.00\n"
+        "TXN_015,PENDING,EUR,PAYPAL,305.00\n";
 
-    size_t input_len = strlen(input);
+    roundtrip_check(csv, strlen(csv), CQ_FMT_CSV, "transactions");
 
-    char out_buf[4096]  = {0};
-    char dict_buf[4096] = {0};
-    cq_dict_t    dict;
-    cq_result_t  result;
+    /* CSV with quoted fields */
+    const char *qcsv =
+        "name,city,status\n"
+        "\"Alice\",\"New York\",\"ACTIVE\"\n"
+        "\"Bob\",\"New York\",\"ACTIVE\"\n"
+        "\"Carol\",\"New York\",\"INACTIVE\"\n"
+        "\"Dave\",\"San Francisco\",\"ACTIVE\"\n"
+        "\"Eve\",\"New York\",\"ACTIVE\"\n";
 
-    int rc = cq_compress(input, input_len, CQ_FMT_JSON,
-                         out_buf, sizeof(out_buf),
-                         dict_buf, sizeof(dict_buf),
-                         &dict, &result);
-    assert(rc == 0);
-
-    char expanded[4096] = {0};
-    size_t expanded_len = 0;
-    rc = cq_expand(out_buf, result.compressed_len,
-                   CQ_FMT_JSON, &dict,
-                   expanded, sizeof(expanded),
-                   &expanded_len);
-    assert(rc == 0 && "cq_expand failed");
-
-    printf("Original : %s\n", input);
-    printf("Expanded : %s\n", expanded);
-
-    int match = (expanded_len == input_len &&
-                 memcmp(expanded, input, input_len) == 0);
-    printf("Round-trip match: %s\n", match ? "PASS" : "FAIL");
-    assert(match && "Round-trip mismatch");
+    roundtrip_check(qcsv, strlen(qcsv), CQ_FMT_CSV, "quoted fields");
 }
 
-static void test_no_candidates(void)
+/* ------------------------------------------------------------------ LOG     */
+
+static void test_log(void)
 {
-    print_section("No repeated strings (nothing to compress)");
+    section("LOG");
 
-    const char *input = "{\"a\":\"b\",\"c\":\"d\",\"e\":\"f\"}";
-    size_t input_len  = strlen(input);
+    const char *line =
+        "[2026-03-29 10:00:01] INFO: User authentication successful"
+        " | ip=192.168.1.101 user=alice@example.com"
+        " path=/api/v1/auth/login status=200 latency=12ms\n";
 
-    char out_buf[4096]  = {0};
-    char dict_buf[4096] = {0};
-    cq_dict_t    dict;
-    cq_result_t  result;
+    /* Repeat 30 times */
+    char buf[16384] = {0};
+    size_t p = 0, llen = strlen(line);
+    for (int i = 0; i < 30; i++) { memcpy(buf + p, line, llen); p += llen; }
 
-    int rc = cq_compress(input, input_len, CQ_FMT_JSON,
-                         out_buf, sizeof(out_buf),
-                         dict_buf, sizeof(dict_buf),
-                         &dict, &result);
-    assert(rc == 0);
+    roundtrip_check(buf, p, CQ_FMT_LOG, "server log");
+}
 
-    printf("Symbol count: %d (expected 0)\n", result.symbol_count);
-    printf("Input  : %s\n", input);
-    printf("Output : %s\n", out_buf);
+/* ------------------------------------------------------------------ CODE    */
 
-    /* Output should be identical to input when nothing is compressed. */
-    assert(strcmp(input, out_buf) == 0 && "Expected passthrough when no candidates");
-    printf("Passthrough: PASS\n");
+static void test_code(void)
+{
+    section("CODE");
+
+    const char *code =
+        "import React from 'react';\n"
+        "import React from 'react';\n"
+        "import React from 'react';\n"
+        "import { useState } from 'react';\n"
+        "import { useState } from 'react';\n"
+        "import { useState } from 'react';\n"
+        "\n"
+        "function handleClick() { console.log('clicked'); }\n"
+        "function handleClick() { console.log('clicked'); }\n"
+        "function handleClick() { console.log('clicked'); }\n"
+        "function handleSubmit() { console.log('submitted'); }\n"
+        "function handleSubmit() { console.log('submitted'); }\n"
+        "function handleSubmit() { console.log('submitted'); }\n"
+        "\n"
+        "const className = 'flex items-center justify-between p-4';\n"
+        "const className = 'flex items-center justify-between p-4';\n"
+        "const className = 'flex items-center justify-between p-4';\n"
+        "const className = 'flex items-center justify-between p-4';\n";
+
+    roundtrip_check(code, strlen(code), CQ_FMT_CODE, "react component");
 }
 
 /* ------------------------------------------------------------------ main    */
 
 int main(void)
 {
-    printf("ContextQuant C Core — Unit Tests\n");
+    printf("ContextQuant — Test Suite\n");
 
-    test_basic_json();
-    test_roundtrip();
-    test_no_candidates();
+    test_json();
+    test_csv();
+    test_log();
+    test_code();
 
     printf("\nAll tests passed.\n");
     return 0;
