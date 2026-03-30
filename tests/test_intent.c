@@ -34,7 +34,7 @@ static void test_null_intent(void)
     cq_dict_t   d;
     cq_result_t r;
 
-    int rc = cq_compress(charges, strlen(charges), CQ_FMT_JSON, NULL,
+    int rc = cq_compress(charges, strlen(charges), CQ_FMT_JSON, NULL, NULL,
                          out, sizeof(out), dict, sizeof(dict), &d, &r);
     assert(rc == 0);
 
@@ -63,7 +63,7 @@ static void test_drop_keys(void)
     cq_dict_t   d;
     cq_result_t r;
 
-    int rc = cq_compress(charges, strlen(charges), CQ_FMT_JSON, &intent,
+    int rc = cq_compress(charges, strlen(charges), CQ_FMT_JSON, &intent, NULL,
                          out, sizeof(out), dict, sizeof(dict), &d, &r);
     assert(rc == 0);
 
@@ -98,7 +98,7 @@ static void test_keep_keys(void)
     /* Without keep — check what symbols we get */
     char out_base[4096] = {0}, dict_base[2048] = {0};
     cq_dict_t d0; cq_result_t r0;
-    cq_compress(small, strlen(small), CQ_FMT_JSON, NULL,
+    cq_compress(small, strlen(small), CQ_FMT_JSON, NULL, NULL,
                 out_base, sizeof(out_base), dict_base, sizeof(dict_base), &d0, &r0);
     printf("Without keep_keys: symbols=%d  dict=%s\n", r0.symbol_count, dict_base);
 
@@ -111,7 +111,7 @@ static void test_keep_keys(void)
 
     char out[4096] = {0}, dict[2048] = {0};
     cq_dict_t d; cq_result_t r;
-    int rc = cq_compress(small, strlen(small), CQ_FMT_JSON, &intent,
+    int rc = cq_compress(small, strlen(small), CQ_FMT_JSON, &intent, NULL,
                          out, sizeof(out), dict, sizeof(dict), &d, &r);
     assert(rc == 0);
     printf("With keep_keys   : symbols=%d  dict=%s\n", r.symbol_count, dict);
@@ -146,7 +146,7 @@ static void test_combined(void)
     char out[8192] = {0}, dict[4096] = {0};
     cq_dict_t d; cq_result_t r;
 
-    int rc = cq_compress(charges, strlen(charges), CQ_FMT_JSON, &intent,
+    int rc = cq_compress(charges, strlen(charges), CQ_FMT_JSON, &intent, NULL,
                          out, sizeof(out), dict, sizeof(dict), &d, &r);
     assert(rc == 0);
 

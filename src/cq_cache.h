@@ -2,6 +2,46 @@
 #define CQ_CACHE_H
 
 /*
+ * When building for WebAssembly (emscripten) define CQ_NO_SQLITE to exclude
+ * the SQLite cache layer entirely.  All functions become no-ops that return
+ * -1 or NULL, letting cq_compress / cq_expand compile without sqlite3.h.
+ */
+#ifdef CQ_NO_SQLITE
+
+#include "cq_types.h"
+#include "cq_compress.h"
+#include <stddef.h>
+
+typedef struct cq_cache cq_cache_t;
+typedef struct { char input_hash[65]; int format; char *label; long input_size;
+                 long compressed_size; int reduction_pct; char *dict_block;
+                 int symbol_count; long input_tokens; long output_tokens;
+                 long created_at; } cq_cache_entry_t;
+typedef struct { long total_entries; long total_input_bytes;
+                 long total_saved_bytes; double avg_reduction_pct; } cq_cache_stats_t;
+
+static inline cq_cache_t *cq_cache_open(const char *p)       { (void)p; return NULL; }
+static inline void        cq_cache_close(cq_cache_t *c)      { (void)c; }
+static inline int cq_cache_store(cq_cache_t *c, const char *i, size_t l,
+    cq_format_t f, const char *lb, const cq_result_t *r)
+    { (void)c;(void)i;(void)l;(void)f;(void)lb;(void)r; return -1; }
+static inline int cq_cache_lookup(cq_cache_t *c, const char *i, size_t l,
+    cq_cache_entry_t *o) { (void)c;(void)i;(void)l;(void)o; return -1; }
+static inline void cq_cache_entry_free(cq_cache_entry_t *e)  { (void)e; }
+static inline int cq_cache_reinject_block(const cq_cache_entry_t *e,
+    char *b, size_t s) { (void)e;(void)b;(void)s; return -1; }
+static inline int cq_compress_cached(cq_cache_t *c, const char *i, size_t l,
+    cq_format_t f, const cq_intent_t *in, const char *lb,
+    char *ob, size_t os, char *db, size_t ds,
+    cq_dict_t *d, cq_result_t *r, int *h)
+    { (void)c;(void)lb;(void)h;
+      return cq_compress(i,l,f,in,NULL,ob,os,db,ds,d,r); }
+static inline int cq_cache_evict_old(cq_cache_t *c, int d) { (void)c;(void)d; return -1; }
+static inline int cq_cache_stats(cq_cache_t *c, cq_cache_stats_t *o) { (void)c;(void)o; return -1; }
+
+#else  /* !CQ_NO_SQLITE — full SQLite implementation */
+
+/*
  * cq_cache.h — SQLite-backed compression cache for ContextQuant.
  *
  * Stores the dictionary block from each compression, keyed by SHA-256 of the
@@ -142,5 +182,7 @@ struct sqlite3 *cq_cache_db(cq_cache_t *cache);
 int cq_cache_evict_old(cq_cache_t *cache, int days);
 
 int cq_cache_stats(cq_cache_t *cache, cq_cache_stats_t *out);
+
+#endif /* !CQ_NO_SQLITE */
 
 #endif /* CQ_CACHE_H */

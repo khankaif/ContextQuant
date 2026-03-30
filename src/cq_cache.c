@@ -1,5 +1,4 @@
 #include "cq_cache.h"
-#include "cq_ngram.h"    /* cq_approx_token_count */
 
 #include <sqlite3.h>
 #include <string.h>
@@ -439,16 +438,18 @@ int cq_compress_cached(cq_cache_t        *cache,
                 const char *db_text  = (const char *)sqlite3_column_text(stmt, 0);
                 const char *ser_text = (const char *)sqlite3_column_text(stmt, 1);
 
-                if (ser_text && *ser_text &&
-                    dict_deserialise(ser_text, dict_out) > 0) {
+                /* Mark as hit whenever the row exists — even for zero-symbol
+                 * compressions where the dict serial is empty.              */
+                was_hit = 1;
+                if (cache_hit) *cache_hit = 1;
 
-                    if (db_text) {
-                        size_t dlen = strlen(db_text);
-                        if (dlen < dict_buf_size)
-                            memcpy(dict_buf, db_text, dlen + 1);
-                    }
-                    was_hit = 1;
-                    if (cache_hit) *cache_hit = 1;
+                if (ser_text && *ser_text)
+                    dict_deserialise(ser_text, dict_out);
+
+                if (db_text) {
+                    size_t dlen = strlen(db_text);
+                    if (dlen < dict_buf_size)
+                        memcpy(dict_buf, db_text, dlen + 1);
                 }
             }
             sqlite3_finalize(stmt);
@@ -457,7 +458,7 @@ int cq_compress_cached(cq_cache_t        *cache,
 
     /* --- full compression (always — no separate rewrite-only path yet) ---
      * TODO: expose cq_rewrite() to skip the ngram scan on cache hits.       */
-    int rc = cq_compress(input, input_len, fmt, intent,
+    int rc = cq_compress(input, input_len, fmt, intent, NULL,
                          out_buf, out_buf_size,
                          dict_buf, dict_buf_size,
                          dict_out, result);

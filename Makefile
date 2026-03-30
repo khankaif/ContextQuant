@@ -6,7 +6,8 @@ LDFLAGS = -lsqlite3
 # Object files
 # Each .c compiles to its own .o.  Only changed files are ever recompiled.
 # -----------------------------------------------------------------------
-LIB_OBJ := src/cq_ngram.o    \
+LIB_OBJ := src/cq_tokenizer.o \
+            src/cq_ngram.o    \
             src/cq_dict.o     \
             src/cq_compress.o \
             src/cq_cache.o    \
@@ -25,7 +26,7 @@ TEST_OBJ := tests/test_compress.o \
 DEPS := $(LIB_OBJ:.o=.d) $(TEST_OBJ:.o=.d) \
         src/cli.d src/json_generator.d src/log_generator.d
 
-.PHONY: all test cli generators clean
+.PHONY: all test cli generators wasm clean
 
 all: cli generators test
 
@@ -81,6 +82,12 @@ synthetic_json_gen: src/json_generator.o
 
 log_gen: src/log_generator.o
 	$(CC) $^ -o $@
+
+# -----------------------------------------------------------------------
+# WebAssembly build (requires emscripten — emcc in PATH)
+# -----------------------------------------------------------------------
+wasm:
+	$(MAKE) -f Makefile.wasm
 
 # -----------------------------------------------------------------------
 # Clean

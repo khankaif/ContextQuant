@@ -5,17 +5,13 @@
 #include <stdint.h>
 #include <ctype.h>
 
-/* --------------------------------------------------------------------------
- * Token-count heuristic  (~4 bytes/token for English/JSON text)
- * -------------------------------------------------------------------------- */
-int cq_approx_token_count(const char *str, size_t len)
-{
-    (void)str;
-    if (len == 0) return 0;
-    return (int)((len + 3) / 4);
-}
-
-#define CQ_DICT_SYNTAX_TOKENS 2
+/*
+ * Fixed token overhead for the dict-line skeleton " = ''\n".
+ * Approximated as 4 tokens: space_equals_space (1-2), open-quote (1),
+ * close-quote (1), newline (1).  Conservative estimate; errs towards
+ * under-compression rather than over-claiming savings.
+ */
+#define CQ_DICT_FIXED_OVERHEAD 4
 
 /* --------------------------------------------------------------------------
  * Internal frequency hash table
@@ -389,10 +385,12 @@ static int cmp_by_saving(const void *a, const void *b)
  * -------------------------------------------------------------------------- */
 int cq_ngram_scan(const char *input, size_t input_len,
                   cq_format_t fmt, const cq_intent_t *intent,
+                  const cq_tokenizer_t *tok,
                   cq_candidate_list_t *out)
 {
     if (!input || !out) return -1;
     if (fmt < 0 || fmt >= CQ_FMT_COUNT) fmt = CQ_FMT_JSON;
+    if (!tok) tok = cq_tokenizer_default();
     memset(out, 0, sizeof(*out));
 
     freq_ht_t *ht = ht_alloc();
@@ -405,16 +403,24 @@ int cq_ngram_scan(const char *input, size_t input_len,
     size_t          tmp_count = 0;
     if (!tmp) { ht_free(ht); return -1; }
 
-    int quoted = fmt_quoted[fmt];
+    int quoted   = fmt_quoted[fmt];
+    int sym_tl   = tok->symbol_tokens;  /* token cost of one symbol occurrence */
 
     for (uint32_t i = 0; i < HT_SLOTS; i++) {
         const ht_slot_t *s = &ht->slots[i];
         if (s->pool_off == SLOT_EMPTY || s->frequency < 2) continue;
 
-        int  tl  = cq_approx_token_count(ht->pool + s->pool_off, s->str_len);
-        long ps  = (long)(tl - 1) * (long)s->frequency;
-        long dc  = (long)tl + (long)CQ_DICT_SYNTAX_TOKENS;
-        long net = ps - dc;
+        int  tl  = tok->count_tokens(ht->pool + s->pool_off, s->str_len,
+                                     tok->userdata);
+        /* Corrected net-saving formula:
+         *   per_use_saving = original_tokens - symbol_tokens
+         *   dict_line_cost = original_tokens + symbol_tokens + fixed_overhead
+         *   net = per_use_saving * frequency - dict_line_cost
+         */
+        long per_use = (long)(tl - sym_tl);
+        long dc      = (long)tl + (long)sym_tl + (long)CQ_DICT_FIXED_OVERHEAD;
+        long net     = per_use * (long)s->frequency - dc;
+
         /* keep_keys override: force inclusion even when economic saving is ≤0 */
         if (net <= 0) {
             if (s->boosted && s->frequency >= 2u) net = 999999L;
