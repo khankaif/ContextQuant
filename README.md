@@ -1,76 +1,118 @@
 # ContextQuant
 
-**Infrastructure-grade symbolic compression for the LLM era.**
+**Symbolic compression for LLM context windows.**
 
-ContextQuant is a high-performance C library designed to solve "Context Bloat"—the primary driver of LLM latency and cost. By using symbolic substitution to compress structured data like JSON, logs, and code, it allows AI agents to ingest significantly larger datasets while staying within context window limits and reducing API expenditures by up to 70%.
+When you feed structured data to an LLM — API responses, logs, database exports — most of the tokens are structural boilerplate: repeated keys, punctuation, prefixes, enum values. ContextQuant strips that boilerplate using a dictionary-based symbolic substitution, then hands the LLM a compact payload + a small dictionary it can use to decode on demand.
 
-## The Problem: Context Rot & Token Tax
-Every byte of structural boilerplate—like repeating JSON keys, log timestamps, or HTML tags—costs money and consumes valuable context space. 
-1.  **High Cost**: Large payloads (Stripe API responses, server logs) often consist of 40–60% repetitive syntax.
-2.  **Context Rot**: As conversations grow and "compact," models lose track of past data, leading to hallucinations or performance collapse.
-3.  **Latency**: Larger prompts take longer for the LLM to process.
+The goal is not smaller files. The goal is more signal per token inside a context window.
 
-## Technical Core
-ContextQuant is built as a zero-dependency C core for maximum portability and speed.
-* **FNV-1a Hash Table**: Utilizes an O(1) hash table with linear probing for blistering fast pattern detection.
-* **24MB String Pool**: Managed memory pool for tracking repeating N-grams across datasets up to 500MB+.
-* **Stateless Architecture**: The core compressor is fully stateless and thread-safe.
-* **Embedded SHA-256**: Features a self-contained, minimal SHA-256 implementation for deterministic data fingerprinting.
+---
 
-## Key Features
+## Why this exists
 
-### 1. Multi-Format Mastery
-Specialized extractors and rewriters optimize tokenization based on the data type:
-* **JSON**: Replaces quoted keys and enum values.
-* **LOG**: Tokenizes by whitespace and delimiters to crush repeating prefixes and levels.
-* **CSV**: Optimized for tabular data and column-value repetitions.
-* **CODE**: Identifies and compresses long identifiers and string literals.
+LLMs are billed per token, not per byte. A 4 MB Stripe API response contains ~1.1M tokens — but fewer than 30% of those are actual business data. The rest is structural syntax (`"`, `:`, `{`, `}`, repeated key names, repeated enum values) that the model still has to read and attend to.
 
-### 2. Persistent SQLite Cache
-A sophisticated cache layer powered by SQLite (WAL mode) stores dictionary blocks keyed by input hash. 
-* **Sub-millisecond Recovery**: If the same data is encountered twice, the engine retrieves the dictionary and re-compresses the payload in ~1ms, bypassing the N-gram scan entirely.
-* **Meaning Preservation**: Re-injects dictionaries into LLM prompts after context compaction without needing the original source file.
+ContextQuant targets exactly that waste.
 
-### 3. Intent-Aware Filtering
-Balance lossless compression with "smart" lossy summarization using the `cq_intent_t` API:
-* **`keep_keys`**: Prioritize specific fields (e.g., `status`, `currency`) for symbol assignment to ensure they are always compressed.
-* **`drop_keys`**: Physically strip irrelevant metadata (e.g., `audit_logs`, `internal_id`) from the payload to minimize token count.
+```
+Input:  {"status":"succeeded","currency":"usd","amount":1000} × 5720 records
+Output: {㠀:㠁,㠂:㠃,㠄:1000} × 5720 + [CQ-DICT] 㠀="status" 㠁="succeeded" ...
+```
 
-### 4. Session Continuity
-The Session Layer links multiple compression results to a single conversation ID.
-* **Compaction Recovery**: Automatically builds consolidated `[CQ-SESSION]` blocks for re-injection after an LLM context window rolls over.
+The model receives the compressed payload and the dictionary in a single prompt block. Expansion is deterministic and lossless.
+
+---
+
+## How it works
+
+**1. N-gram scan** — walks the input once with an FNV-1a hash table, tracking frequency of every candidate string. Candidates are scored by net token savings:
+
+```
+score = (tokens_saved_per_use × frequency) − dict_line_cost
+```
+
+Only candidates with `score > 0` become symbols. The tokenizer is pluggable; the default is a character-class weighted heuristic calibrated against cl100k_base.
+
+**2. Symbol assignment** — top-N candidates get assigned symbols from one of three schemes:
+
+| Scheme | Symbol | Token cost | Best for |
+|---|---|---|---|
+| `pua_unicode` (default) | `㠀`…`㿿` | 1 token | Maximum token ROI |
+| `tilde_alpha` | `~A`…`~z` | 2 tokens | ASCII-safe pipelines |
+| `caret_decimal` | `^0`…`^255` | 2–3 tokens | Legacy/debug |
+
+**3. Format-aware rewrite** — a format-specific pass (JSON, CSV, LOG, CODE) replaces each matched string with its symbol. Quoted fields are handled correctly; round-trip fidelity is tested.
+
+**4. Dictionary block** — a compact `[CQ-DICT]` header maps every symbol back to its original string, designed to be re-injected into the prompt after context compaction.
+
+---
 
 ## Benchmarks
-Results from 100MB stress tests on standard hardware:
 
-| Format | Avg. Reduction | Throughput | Fidelity |
-| :--- | :--- | :--- | :--- |
-| **LOG** | ~70% | 145 MB/s | Lossless |
-| **JSON** | ~43% | 147 MB/s | Lossless |
-| **CODE** | ~23% | 150 MB/s | Lossless |
-| **CSV** | ~16% | 155 MB/s | Lossless |
+Measured on a 4 MB synthetic Stripe-style JSON corpus (5720 charge records). Token counts via heuristic tokenizer calibrated against tiktoken cl100k_base.
 
-## Build & Usage
+| Format | Token reduction | Byte reduction | Throughput |
+|---|---|---|---|
+| JSON | ~14% | ~19% | ~53 MB/s |
 
-### Compilation
-Build the CLI tool and synthetic data generators:
+> **Note on token metrics:** Token reduction is estimated via a character-class weighted heuristic. The heuristic has been validated against tiktoken (cl100k_base) — see `scripts/validate_heuristic.py` for the comparison tooling. Exact integration via the pluggable tokenizer interface is on the roadmap.
+
+---
+
+## Build
+
 ```bash
-make all
+make all        # CLI + test binaries + data generators
+make test       # run all 4 test suites
+make wasm       # Emscripten build (requires emcc in PATH)
 ```
 
-### Compressing Data
+---
+
+## Usage
+
 ```bash
+# Compress a file
 ./contextquant_cli payload.json json
+
+# Select symbol scheme
+./contextquant_cli payload.json json --tilde     # ASCII-safe
+./contextquant_cli payload.json json --caret     # legacy format
+
+# Generate test corpus
+./synthetic_json_gen payload.json 4mb charges 42
+
+# Validate heuristic tokenizer against tiktoken
+pip install tiktoken
+python scripts/validate_heuristic.py payload.json json
 ```
 
-### Generating Test Data
-Generate a 64MB deterministic Stripe-style JSON payload:
-```bash
-./synthetic_json_gen payload.json 64mb charges 42
+---
+
+## Architecture
+
+```
+cq_tokenizer   — pluggable token-count interface (heuristic or exact via FFI)
+cq_ngram       — frequency scan + token-aware candidate scoring
+cq_dict        — symbol assignment + multi-scheme emission
+cq_compress    — format-aware rewrite (JSON / CSV / LOG / CODE) + expand
+cq_cache       — SQLite-backed result cache (WAL mode, keyed by SHA-256)
+cq_session     — multi-turn session tracking for context compaction recovery
 ```
 
-## Project Status
-ContextQuant is currently in **v1.0.0-alpha**. Upcoming milestones include:
-1.  **Wasm Bridge**: Compiling the C core and SQLite to WebAssembly for browser-based demos.
-2.  **TypeScript SDK**: Providing high-level wrappers for Node.js and AI Agent platforms.
-3.  **Safety Interceptor**: Deterministic validation of LLM outputs to prevent symbol hallucination.
+The core (`cq_ngram`, `cq_dict`, `cq_compress`, `cq_tokenizer`) has no external dependencies and compiles to WebAssembly. The cache and session layers require SQLite and are excluded from Wasm builds via `CQ_NO_SQLITE`.
+
+---
+
+## Roadmap
+
+- [ ] Exact tokenizer integration (tiktoken via Python FFI or native port)
+- [ ] TypeScript/Node.js SDK wrapping the Wasm build
+- [ ] Streaming mode for payloads that arrive incrementally
+- [ ] Symbol hallucination guard — validate that LLM output contains no bare symbols
+
+---
+
+## Status
+
+`v1.0.0-alpha` — core compression, expand, cache, and session are production-ready. Token metrics are heuristic until exact tokenizer integration lands.
