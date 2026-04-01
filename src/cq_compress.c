@@ -360,6 +360,24 @@ int cq_compress(const char             *input,
                                    : cq_tokenizer_default();
     cq_symbol_scheme_t    scheme = opts ? opts->scheme : CQ_SYM_PUA_UNICODE;
 
+    /*
+     * Scheme-aware scoring: override symbol_tokens to match the chosen scheme
+     * so candidate selection uses the actual per-symbol token cost, not the
+     * default tokenizer's assumption (which is calibrated for PUA Unicode).
+     *
+     *   PUA Unicode   → 1 token  (single BPE token per private-use codepoint)
+     *   Tilde Alpha   → 2 tokens (~A, ~B … each tokenize as "~" + letter)
+     *   Caret Decimal → 2 tokens (^0..^9; conservative — ^10+ cost more)
+     */
+    static const int scheme_sym_tokens[] = {
+        [CQ_SYM_PUA_UNICODE]   = 1,
+        [CQ_SYM_TILDE_ALPHA]   = 2,
+        [CQ_SYM_CARET_DECIMAL] = 2,
+    };
+    cq_tokenizer_t adjusted_tok = *tok;
+    adjusted_tok.symbol_tokens  = scheme_sym_tokens[scheme];
+    tok = &adjusted_tok;
+
     cq_candidate_list_t candidates;
     if (cq_ngram_scan(input, input_len, fmt, intent, tok, &candidates) < 0) return -1;
     if (cq_dict_build(&candidates, scheme, dict_out) < 0) return -1;
