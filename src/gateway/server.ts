@@ -24,7 +24,7 @@ export function createGateway(github = new GithubClient()): McpServer {
 
   server.registerTool("github_get_issue", {
     title: "Recover selected GitHub issue fields",
-    description: "Fetch only explicitly requested fields from one issue selected from github_search_issues. This is the recovery path for fields withheld from list results.",
+    description: "Return only explicitly requested fields from one issue selected from github_search_issues. This is the recovery path for fields withheld from list results.",
     inputSchema: {
       owner,
       repo,
