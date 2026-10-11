@@ -1,0 +1,49 @@
+{
+  "metrics": [
+    {
+      "id": "correct",
+      "label": "Correct",
+      "kind": "binary"
+    },
+    {
+      "id": "made_up",
+      "label": "Made-up answer",
+      "kind": "binary",
+      "better": "lower"
+    }
+  ],
+  "perf_fields": [
+    {
+      "id": "context_tokens",
+      "label": "Ctx tokens"
+    },
+    {
+      "id": "in_tokens",
+      "label": "Model in tok"
+    },
+    {
+      "id": "latency_s",
+      "label": "Latency",
+      "unit": "s"
+    },
+    {
+      "id": "overflow",
+      "label": "Overflow"
+    },
+    {
+      "id": "turns",
+      "label": "Turns"
+    }
+  ],
+  "harness_paths": [
+    "eval/cases.ts",
+    "eval/harness.ts",
+    "bench/people.ts",
+    "src/shape.ts",
+    "src/profiles.ts",
+    "src/ids.ts",
+    "src/tokens.ts"
+  ],
+  "metrics_md": "Variants: baseline = full minified JSON; v1 = only the query's fields as minified JSON (the API's own `fields` parameter); v2 = ContextQuant json (query fields + notes on what was left out); v3 = ContextQuant tsv. Correct = programmatic check against answers computed from the fixture (eval/harness.ts). Made-up answer = on left-out questions, the model named a school although the data it saw had none. Ctx tokens = o200k tokens of the tool result shown. Overflow = prompt longer than the local model's 32k window (row marked truncated).",
+  "harness_sha": "53f1e86c721f821ff42f010fa5b81a6136704aa602375ca4f5e5d7ed8205e4b3"
+}

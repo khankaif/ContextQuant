@@ -1,118 +1,94 @@
 # ContextQuant
 
-**Symbolic compression for LLM context windows.**
-
-When you feed structured data to an LLM — API responses, logs, database exports — most of the tokens are structural boilerplate: repeated keys, punctuation, prefixes, enum values. ContextQuant strips that boilerplate using a dictionary-based symbolic substitution, then hands the LLM a compact payload + a small dictionary it can use to decode on demand.
-
-The goal is not smaller files. The goal is more signal per token inside a context window.
-
----
-
-## Why this exists
-
-LLMs are billed per token, not per byte. A 4 MB Stripe API response contains ~1.1M tokens — but fewer than 30% of those are actual business data. The rest is structural syntax (`"`, `:`, `{`, `}`, repeated key names, repeated enum values) that the model still has to read and attend to.
-
-ContextQuant targets exactly that waste.
+**Shape search results for AI agents: only the fields the query needs, a hard token budget, and a
+clear note of what was left out.**
 
 ```
-Input:  {"status":"succeeded","currency":"usd","amount":1000} × 5720 records
-Output: {㠀:㠁,㠂:㠃,㠄:1000} × 5720 + [CQ-DICT] 㠀="status" 㠁="succeeded" ...
+# profiles: showing 3 of 25 · next_cursor="9KvKW9…" · total_count=12400
+# left out fields: basic_profile.headline, basic_profile.profile_picture_permalink, education, …
+# count by basic_profile.location.raw (all 25 records in this response): London, England, United Kingdom 6 · Toronto, Ontario, Canada 5 · …
+# 22 records not shown · call again with cursor=next_cursor
+{"crustdata_person_id":5571966,"basic_profile":{"name":"Ananya Okafor","current_title":"Head of Data",…}}
+…
 ```
 
-The model receives the compressed payload and the dictionary in a single prompt block. Expansion is deterministic and lossless.
+## Why
 
----
+Agents read API responses built for programs. Most of each record is irrelevant to the question,
+it costs tokens, and long irrelevant context lowers accuracy. When responses get cut to fit, the
+agent usually isn't told. ContextQuant keeps what the query asked about and says what it removed.
 
-## How it works
+## Measured
 
-**1. N-gram scan** — walks the input once with an FNV-1a hash table, tracking frequency of every candidate string. Candidates are scored by net token savings:
+Person-search page modelled on Crustdata's `POST /person/search` docs, 25 profiles, o200k tokens
+(`bun run bench`):
 
-```
-score = (tokens_saved_per_use × frequency) − dict_line_cost
-```
+| | Tokens | vs minified JSON |
+|---|---|---|
+| pretty JSON | 21,033 | +33.4% |
+| minified JSON | 15,768 | — |
+| TOON | 15,063 | −4.5% |
+| cq, fields from the query | 2,885 | **−81.7%** |
+| cq, fields from the query, TSV | 1,933 | −87.7% |
 
-Only candidates with `score > 0` become symbols. The tokenizer is pluggable; the default is a character-class weighted heuristic calibrated against cl100k_base.
+Almost all the saving is field selection, which an API's own `fields` parameter can also do if the
+agent sets it right. What ContextQuant adds shows up in accuracy. 50 profiles, eval round 2:
 
-**2. Symbol assignment** — top-N candidates get assigned symbols from one of three schemes:
+| | Tokens | Gemini 3.8 Flash | Gemma 4 26B | count questions (Flash) | made-up answers (Gemma) |
+|---|---|---|---|---|---|
+| minified JSON (full response) | 30,320 | 92% | doesn't fit (free tier: 16k tokens/min) | 61% | — |
+| query fields only (API `fields`) | 5,394 | 97% | 94% | 83% | **6** |
+| **cq json** | 5,693 | **100%** | **100%** | **100%** | **0** |
+| cq tsv | 3,753 | 100% | 100% | 100% | 0 |
 
-| Scheme | Symbol | Token cost | Best for |
-|---|---|---|---|
-| `pua_unicode` (default) | `㠀`…`㿿` | 1 token | Maximum token ROI |
-| `tilde_alpha` | `~A`…`~z` | 2 tokens | ASCII-safe pipelines |
-| `caret_decimal` | `^0`…`^255` | 2–3 tokens | Legacy/debug |
+36 questions × 3 runs per arm, answers graded in code (`eval/`). Questions: lookups, URL copies,
+counts, filters, total count, a field that was left out, and "partial" traps where related fields are
+shown (headline missing but title shown). The 6 made-up answers are all one trap: without the
+left-out note, Gemma answered "What is X's headline?" with X's title, in all 3 runs on both
+headline questions; with the note it answered NOT_SHOWN. Counts are 100% because cq writes value
+counts for the query's filter fields. Caveats: synthetic data, 36 questions (about ±18 points per
+arm for small differences), the count questions use the same fields the counts come from.
 
-**3. Format-aware rewrite** — a format-specific pass (JSON, CSV, LOG, CODE) replaces each matched string with its symbol. Quoted fields are handled correctly; round-trip fidelity is tested.
-
-**4. Dictionary block** — a compact `[CQ-DICT]` header maps every symbol back to its original string, designed to be re-injected into the prompt after context compaction.
-
----
-
-## Benchmarks
-
-Measured on a 4 MB synthetic Stripe-style JSON corpus (5720 charge records). Token counts via heuristic tokenizer calibrated against tiktoken cl100k_base.
-
-| Format | Token reduction | Byte reduction | Throughput |
-|---|---|---|---|
-| JSON | ~14% | ~19% | ~53 MB/s |
-
-> **Note on token metrics:** Token reduction is estimated via a character-class weighted heuristic. The heuristic has been validated against tiktoken (cl100k_base) — see `scripts/validate_heuristic.py` for the comparison tooling. Exact integration via the pluggable tokenizer interface is on the roadmap.
-
----
-
-## Build
+## Use
 
 ```bash
-make all        # CLI + test binaries + data generators
-make test       # run all 4 test suites
-make wasm       # Emscripten build (requires emcc in PATH)
+bun install
+bun test
+bun run bench
+
+bun src/cli.ts gen people --n 25 > bench/out/people.json
+bun src/cli.ts shape bench/out/people.json \
+  --people-query '{"filters":{"field":"basic_profile.location.full_location","type":"(.)","value":"San Francisco"}}' \
+  --max-tokens 1500 --more 'call again with cursor=next_cursor'
 ```
 
----
+```ts
+import { shape, fieldsFromFilters, PEOPLE_BASE, PEOPLE_RENAME, AliasMap } from "./src/index.ts";
 
-## Usage
+const ids = new AliasMap(); // one per agent session
+const fields = fieldsFromFilters(request.filters, PEOPLE_BASE, PEOPLE_RENAME);
+const { text, stats } = shape(responseText, { fields, maxTokens: 4000, ids, more: "call again with cursor=next_cursor" });
+const args = ids.rewriteArgs(toolCallArgs); // #n back to real IDs
+```
+
+## MCP gateway prototype
+
+The TypeScript reference gateway exposes `github_search_issues` and `github_get_issue` over stdio.
+It requires no token for public repositories; set `GITHUB_TOKEN` for authenticated rate limits or
+private repository access.
 
 ```bash
-# Compress a file
-./contextquant_cli payload.json json
-
-# Select symbol scheme
-./contextquant_cli payload.json json --tilde     # ASCII-safe
-./contextquant_cli payload.json json --caret     # legacy format
-
-# Generate test corpus
-./synthetic_json_gen payload.json 4mb charges 42
-
-# Validate heuristic tokenizer against tiktoken
-pip install tiktoken
-python scripts/validate_heuristic.py payload.json json
+GITHUB_TOKEN=... bun run mcp
 ```
 
----
+`github_search_issues` emits a receipt naming fields withheld from the current search page and a
+scoped `github_get_issue` recovery tool. It does not yet include persistent session handles,
+tracing, Jira, or HubSpot adapters; see the [production HLD](docs/HLD.md) and [build plan](docs/PLAN.md).
 
-## Architecture
+## Docs
 
-```
-cq_tokenizer   — pluggable token-count interface (heuristic or exact via FFI)
-cq_ngram       — frequency scan + token-aware candidate scoring
-cq_dict        — symbol assignment + multi-scheme emission
-cq_compress    — format-aware rewrite (JSON / CSV / LOG / CODE) + expand
-cq_cache       — SQLite-backed result cache (WAL mode, keyed by SHA-256)
-cq_session     — multi-turn session tracking for context compaction recovery
-```
-
-The core (`cq_ngram`, `cq_dict`, `cq_compress`, `cq_tokenizer`) has no external dependencies and compiles to WebAssembly. The cache and session layers require SQLite and are excluded from Wasm builds via `CQ_NO_SQLITE`.
-
----
-
-## Roadmap
-
-- [ ] Exact tokenizer integration (tiktoken via Python FFI or native port)
-- [ ] TypeScript/Node.js SDK wrapping the Wasm build
-- [ ] Streaming mode for payloads that arrive incrementally
-- [ ] Symbol hallucination guard — validate that LLM output contains no bare symbols
-
----
-
-## Status
-
-`v1.0.0-alpha` — core compression, expand, cache, and session are production-ready. Token metrics are heuristic until exact tokenizer integration lands.
+- Eval: `eval/` (cases, grader, runner); `eval/run-all.sh` runs it, `bun eval/summary.ts` prints results
+- [One pager](docs/ONE_PAGER.md) · [HLD](docs/HLD.md) · [LLD](docs/LLD.md)
+- [Research: strongest business use case](docs/research/Context%20shaping%20business%20use%20case.md) · [arXiv review notes](docs/research/notes)
+- v1 (C, symbolic dictionary compression) lives in [`legacy/c/`](legacy/c). Measured with real
+  tokenizers it saved nothing (−4.2% cl100k, +1.6% o200k), which is why v2 exists.

@@ -1,8 +1,10 @@
 # Large local payloads
 massive_payload.json
 payloads/
+data/
 *.payload.json
-*.json
+bench/out/
+node_modules/
 
 # Local build outputs
 contextquant_cli
@@ -42,3 +44,6 @@ GEMINI.md
 course_output
 
 skill.md
+# Local secrets (Bun loads .env automatically)
+.env
+.env.*

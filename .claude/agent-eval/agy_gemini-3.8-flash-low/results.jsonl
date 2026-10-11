@@ -1,0 +1,2 @@
+{"task":"topcity-1","variant":"cq","rep":0,"model":"agy:gemini-3.8-flash-low","status":"ok","calls":3,"turns":1,"hit_max_turns":false,"clipped":false,"input_tokens":36051,"output_tokens":566,"tool_result_tokens":5651,"seconds":40.3,"answer":"New York","correct":true}
+{"task":"topcity-1","variant":"raw","rep":0,"model":"agy:gemini-3.8-flash-low","status":"ok","calls":4,"turns":1,"hit_max_turns":false,"clipped":false,"input_tokens":74566,"output_tokens":1024,"tool_result_tokens":47089,"seconds":53.6,"answer":"New York","correct":true}
