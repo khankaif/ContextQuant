@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { GithubClient, renderGithubIssue, renderGithubSearch, type GithubSearchResponse } from "../src/gateway/github.ts";
+import { GithubClient, renderGithubIssue, renderGithubSearch, type GithubSearchResponse } from "../src/adapters/github.ts";
 import type { Json } from "../src/shape.ts";
 import { o200k } from "../src/tokens.ts";
 

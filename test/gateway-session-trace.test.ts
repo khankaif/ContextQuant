@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { SessionStore } from "../src/gateway/session.ts";
 import { TraceWriter } from "../src/gateway/trace.ts";
 import { createGateway } from "../src/gateway/server.ts";
-import { GithubClient } from "../src/gateway/github.ts";
+import { GithubClient } from "../src/adapters/github.ts";
 
 describe("SessionStore recovery security", () => {
   test("allows valid recovery within same session and scope", () => {

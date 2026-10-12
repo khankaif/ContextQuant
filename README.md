@@ -73,22 +73,24 @@ const args = ids.rewriteArgs(toolCallArgs); // #n back to real IDs
 
 ## MCP gateway prototype
 
-The TypeScript reference gateway exposes `github_search_issues` and `github_get_issue` over stdio.
-It requires no token for public repositories; set `GITHUB_TOKEN` for authenticated rate limits or
-private repository access.
+The gateway (`src/gateway/server.ts`) exposes six tools over stdio: a search tool and a detail
+tool each for GitHub issues, Jira, and HubSpot CRM. GitHub needs no token for public repositories;
+set `GITHUB_TOKEN` for higher rate limits or private repositories. Jira and HubSpot need their own
+credentials and have only been tested against fixtures.
 
 ```bash
 GITHUB_TOKEN=... bun run mcp
 ```
 
-`github_search_issues` emits a receipt naming fields withheld from the current search page and a
-scoped `github_get_issue` recovery tool. It does not yet include persistent session handles,
-tracing, Jira, or HubSpot adapters; see the [production HLD](docs/HLD.md) and [build plan](docs/PLAN.md).
+Each search result starts with a receipt: what was left out, counts over the whole page, the next
+page, and, when rows were cut for the token budget, the exact `budget_tokens` that shows them all.
+The detail tool returns only the fields the agent asks for. Session handles are in memory only; see
+the [production HLD](docs/HLD.md).
 
 ## Docs
 
 - Eval: `eval/` (cases, grader, runner); `eval/run-all.sh` runs it, `bun eval/summary.ts` prints results
 - [One pager](docs/ONE_PAGER.md) · [HLD](docs/HLD.md) · [LLD](docs/LLD.md)
 - [Research: strongest business use case](docs/research/Context%20shaping%20business%20use%20case.md) · [arXiv review notes](docs/research/notes)
-- v1 (C, symbolic dictionary compression) lives in [`legacy/c/`](legacy/c). Measured with real
+- v1 (C, symbolic dictionary compression) lives in [`.legacy/c/`](.legacy/c). Measured with real
   tokenizers it saved nothing (−4.2% cl100k, +1.6% o200k), which is why v2 exists.
