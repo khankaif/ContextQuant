@@ -1,5 +1,6 @@
-import { shape, type Json } from "../shape.ts";
+import type { Json } from "../shape.ts";
 import { o200k } from "../tokens.ts";
+import { DEFAULT_BUDGET_TOKENS, emptyRendered, renderWithReceipt, type Rendered } from "./receipt.ts";
 import type { Adapter, AdapterPolicy, ProviderAuth, ProviderPage } from "./types.ts";
 
 export const GITHUB_SEARCH_FIELDS = [
@@ -77,50 +78,39 @@ export class GithubClient {
 export function renderGithubSearch(
   page: GithubSearchResponse,
   args: GithubSearchArgs,
-  maxTokens = args.budget_tokens ?? 1_500,
-): string {
+  maxTokens = args.budget_tokens ?? DEFAULT_BUDGET_TOKENS,
+): Rendered {
   if (!page.items.length) return renderEmptySearch(page, maxTokens);
-
-  const raw = JSON.stringify({ items: page.items, total_count: page.total_count });
-  const nextPage = page.items.length === 30 && (args.page ?? 1) * 30 < Math.min(page.total_count, 1_000) ? (args.page ?? 1) + 1 : undefined;
-  const policy = shape(raw, { fields: GITHUB_SEARCH_FIELDS, label: "github issues", ids: false });
-  if (!policy.stats) throw new Error(`GitHub search payload could not be inspected: ${policy.passthrough ?? "unknown error"}`);
-  const withheld = policy.stats.leftOut.length ? policy.stats.leftOut.join(", ") : "none";
-  const receipt = receiptLines(page, withheld);
-  let remainingBudget = maxTokens - tokenCount(receipt.join("\n")) - 1;
-  while (remainingBudget >= 64) {
-    const result = shape(raw, {
-      fields: GITHUB_SEARCH_FIELDS,
-      maxTokens: remainingBudget,
-      label: "github issues",
-      more: nextPage ? `call github_search_issues with page=${nextPage}` : undefined,
-      counts: ["labels.name", "assignee.login"],
-      ids: false,
-    });
-    if (!result.stats) throw new Error(`GitHub search payload could not be shaped: ${result.passthrough ?? "unknown error"}`);
-    const text = [...receipt, result.text].join("\n");
-    const overflow = tokenCount(text) - maxTokens;
-    if (overflow <= 0) return text;
-    remainingBudget -= overflow;
-  }
-  throw new Error("token budget is too small to render the ContextQuant receipt");
+  return renderWithReceipt({
+    raw: JSON.stringify({ items: page.items, total_count: page.total_count }),
+    fields: GITHUB_SEARCH_FIELDS,
+    label: "github issues",
+    counts: ["labels.name", "assignee.login"],
+    receipt: receiptLines(page, nextGithubPage(page, args.page)),
+    tool: "github_search_issues",
+    maxTokens,
+  });
 }
 
-function receiptLines(page: GithubSearchResponse, withheld: string): string[] {
+function nextGithubPage(page: GithubSearchResponse, current = 1): number | undefined {
+  return page.items.length === 30 && current * 30 < Math.min(page.total_count, 1_000) ? current + 1 : undefined;
+}
+
+function receiptLines(page: GithubSearchResponse, nextPage?: number): string[] {
   const receipt = [
     `# cq receipt: github_search_issues · upstream_page=${page.items.length} · total=${page.total_count}`,
     "# selected fields are shown below; recover omitted issue detail with github_get_issue(owner, repo, issue_number, fields)",
     "# not returned by GitHub search: full comments, timeline events · use a dedicated tool before claiming either",
-    `# withheld by policy: ${withheld}`,
   ];
+  if (nextPage) receipt.push(`# next page available: call github_search_issues with page=${nextPage}`);
   if (page.incomplete_results) receipt.push("# warning: GitHub marked this search incomplete; do not treat total as exhaustive");
   return receipt;
 }
 
-function renderEmptySearch(page: GithubSearchResponse, maxTokens: number): string {
-  const text = [...receiptLines(page, "none"), "# github issues: showing 0 of 0"].join("\n");
+function renderEmptySearch(page: GithubSearchResponse, maxTokens: number): Rendered {
+  const text = [...receiptLines(page), "# github issues: showing 0 of 0"].join("\n");
   if (tokenCount(text) > maxTokens) throw new Error("token budget is too small to render the ContextQuant receipt");
-  return text;
+  return emptyRendered(text);
 }
 
 /** Project one issue detail response to the fields explicitly requested by the agent. */
@@ -174,9 +164,7 @@ export const githubAdapter: Adapter = {
     const searchArgs = args as GithubSearchArgs;
     const client = new GithubClient(auth?.token as string | undefined);
     const page = await client.search(searchArgs);
-    const nextPage = page.items.length === 30 && (searchArgs.page ?? 1) * 30 < Math.min(page.total_count, 1_000)
-      ? String((searchArgs.page ?? 1) + 1)
-      : undefined;
+    const nextPage = nextGithubPage(page, searchArgs.page)?.toString();
 
     return {
       payload: page as unknown as Json,
@@ -204,7 +192,7 @@ export const githubAdapter: Adapter = {
         return [];
       },
       redactedPaths: [],
-      defaultBudgetTokens: 1_500,
+      defaultBudgetTokens: DEFAULT_BUDGET_TOKENS,
     };
   },
 };

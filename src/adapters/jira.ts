@@ -1,6 +1,7 @@
-import { shape, type Json } from "../shape.ts";
+import type { Json } from "../shape.ts";
 import { o200k } from "../tokens.ts";
 import type { Adapter, AdapterPolicy, ProviderAuth, ProviderPage } from "./types.ts";
+import { DEFAULT_BUDGET_TOKENS, emptyRendered, renderWithReceipt, type Rendered } from "./receipt.ts";
 
 export const JIRA_SEARCH_FIELDS = [
   "key",
@@ -79,50 +80,34 @@ export class JiraClient {
 }
 
 /** Render Jira search response with receipt and JSONL */
-export function renderJiraSearch(page: JiraSearchResponse, args: JiraSearchArgs, maxTokens = args.budget_tokens ?? 1_500): string {
+export function renderJiraSearch(page: JiraSearchResponse, args: JiraSearchArgs, maxTokens = args.budget_tokens ?? DEFAULT_BUDGET_TOKENS): Rendered {
   if (!page.issues.length) return renderEmptySearch(page, maxTokens);
-
-  const raw = JSON.stringify({ issues: page.issues, total_count: page.total });
-  const policy = shape(raw, { fields: JIRA_SEARCH_FIELDS, label: "jira issues", ids: false });
-  if (!policy.stats) throw new Error(`Jira search payload could not be inspected: ${policy.passthrough ?? "unknown error"}`);
-  const withheld = policy.stats.leftOut.length ? policy.stats.leftOut.join(", ") : "none";
-  const receipt = receiptLines(page, withheld, args.cursor);
-
-  let remainingBudget = maxTokens - tokenCount(receipt.join("\n")) - 1;
-  while (remainingBudget >= 64) {
-    const result = shape(raw, {
-      fields: JIRA_SEARCH_FIELDS,
-      maxTokens: remainingBudget,
-      label: "jira issues",
-      more: page.nextPageToken ? `call jira_search_issues with cursor="${page.nextPageToken}"` : undefined,
-      counts: ["fields.status.name", "fields.priority.name"],
-      ids: false,
-    });
-    if (!result.stats) throw new Error(`Jira search payload could not be shaped: ${result.passthrough ?? "unknown error"}`);
-    const text = [...receipt, result.text].join("\n");
-    const overflow = tokenCount(text) - maxTokens;
-    if (overflow <= 0) return text;
-    remainingBudget -= overflow;
-  }
-  throw new Error("token budget is too small to render the ContextQuant receipt");
+  return renderWithReceipt({
+    raw: JSON.stringify({ issues: page.issues, total_count: page.total }),
+    fields: JIRA_SEARCH_FIELDS,
+    label: "jira issues",
+    counts: ["fields.status.name", "fields.priority.name"],
+    receipt: receiptLines(page, args.cursor),
+    tool: "jira_search_issues",
+    maxTokens,
+  });
 }
 
-function receiptLines(page: JiraSearchResponse, withheld: string, cursor?: string): string[] {
+function receiptLines(page: JiraSearchResponse, cursor?: string): string[] {
   const receipt = [
     `# cq receipt: jira_search_issues · upstream_page=${page.issues.length} · total=${page.total}`,
     "# selected fields are shown below; recover omitted issue detail with jira_get_issue(issue_key, fields)",
     "# not returned by search: issue attachments, audit logs · use dedicated tools before claiming either",
-    `# withheld by policy: ${withheld}`,
   ];
   if (page.nextPageToken) receipt.push(`# next page available: call jira_search_issues with cursor="${page.nextPageToken}"`);
   if (cursor) receipt.push(`# paging cursor used: ${cursor}`);
   return receipt;
 }
 
-function renderEmptySearch(page: JiraSearchResponse, maxTokens: number): string {
-  const text = [...receiptLines(page, "none"), "# jira issues: showing 0 of 0"].join("\n");
+function renderEmptySearch(page: JiraSearchResponse, maxTokens: number): Rendered {
+  const text = [...receiptLines(page), "# jira issues: showing 0 of 0"].join("\n");
   if (tokenCount(text) > maxTokens) throw new Error("token budget is too small to render the ContextQuant receipt");
-  return text;
+  return emptyRendered(text);
 }
 
 /** Project issue detail response to requested fields */
@@ -194,7 +179,7 @@ export const jiraAdapter: Adapter = {
         return [];
       },
       redactedPaths: [],
-      defaultBudgetTokens: 1_500,
+      defaultBudgetTokens: DEFAULT_BUDGET_TOKENS,
     };
   },
 };

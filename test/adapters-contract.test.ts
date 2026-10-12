@@ -43,10 +43,10 @@ describe("Phase 3: Universal Adapter Contract", () => {
     };
 
     test("renders omission receipt and recovery for Jira search", () => {
-      const text = renderJiraSearch(jiraPage, { jql: "project = PAY" });
+      const { text } = renderJiraSearch(jiraPage, { jql: "project = PAY" });
       expect(text).toContain("cq receipt: jira_search_issues");
       expect(text).toContain("jira_get_issue(issue_key, fields)");
-      expect(text).toContain("withheld by policy:");
+      expect(text).toContain("left out fields:");
       expect(text).toContain("fields.description");
       expect(text).toContain('call jira_search_issues with cursor="eyJwYWdlIjoyfQ=="');
       expect(text).not.toContain("Idempotency key check fails");
@@ -89,10 +89,10 @@ describe("Phase 3: Universal Adapter Contract", () => {
     };
 
     test("renders omission receipt and cursor for HubSpot CRM search", () => {
-      const text = renderHubSpotSearch(hubspotPage, { object_type: "companies" });
+      const { text } = renderHubSpotSearch(hubspotPage, { object_type: "companies" });
       expect(text).toContain("cq receipt: hubspot_search · object_type=companies");
       expect(text).toContain("hubspot_get_record(object_type, id, properties)");
-      expect(text).toContain("withheld by policy:");
+      expect(text).toContain("left out fields:");
       expect(text).toContain("properties.description");
       expect(text).toContain('call hubspot_search with after="25"');
       expect(text).not.toContain("Internal sensitive sales qualification notes");

@@ -1,6 +1,7 @@
-import { shape, type Json } from "../shape.ts";
+import type { Json } from "../shape.ts";
 import { o200k } from "../tokens.ts";
 import type { Adapter, AdapterPolicy, ProviderAuth, ProviderPage } from "./types.ts";
+import { DEFAULT_BUDGET_TOKENS, emptyRendered, renderWithReceipt, type Rendered } from "./receipt.ts";
 
 export type HubSpotObjectType = "contacts" | "companies" | "deals" | "tickets";
 
@@ -105,57 +106,34 @@ export class HubSpotClient {
 export function renderHubSpotSearch(
   page: HubSpotSearchResponse,
   args: HubSpotSearchArgs,
-  maxTokens = args.budget_tokens ?? 1_500,
-): string {
+  maxTokens = args.budget_tokens ?? DEFAULT_BUDGET_TOKENS,
+): Rendered {
   if (!page.results.length) return renderEmptySearch(page, maxTokens);
-
-  const raw = JSON.stringify({ results: page.results, total_count: page.total });
-  const baseFields = [
-    "id",
-    ...(HUBSPOT_DEFAULT_PROPERTIES[args.object_type] ?? []).map((p) => `properties.${p}`),
-    "updatedAt",
-  ];
-
-  const policy = shape(raw, { fields: baseFields, label: `hubspot ${args.object_type}`, ids: false });
-  if (!policy.stats) throw new Error(`HubSpot search payload could not be inspected: ${policy.passthrough ?? "unknown error"}`);
-  const withheld = policy.stats.leftOut.length ? policy.stats.leftOut.join(", ") : "none";
-  const nextAfter = page.paging?.next?.after;
-  const receipt = receiptLines(page, args.object_type, withheld, nextAfter);
-
-  let remainingBudget = maxTokens - tokenCount(receipt.join("\n")) - 1;
-  while (remainingBudget >= 64) {
-    const result = shape(raw, {
-      fields: baseFields,
-      maxTokens: remainingBudget,
-      label: `hubspot ${args.object_type}`,
-      more: nextAfter ? `call hubspot_search with after="${nextAfter}"` : undefined,
-      counts: ["properties.industry", "properties.city"],
-      ids: false,
-    });
-    if (!result.stats) throw new Error(`HubSpot search payload could not be shaped: ${result.passthrough ?? "unknown error"}`);
-    const text = [...receipt, result.text].join("\n");
-    const overflow = tokenCount(text) - maxTokens;
-    if (overflow <= 0) return text;
-    remainingBudget -= overflow;
-  }
-  throw new Error("token budget is too small to render the ContextQuant receipt");
+  return renderWithReceipt({
+    raw: JSON.stringify({ results: page.results, total_count: page.total }),
+    fields: ["id", ...(HUBSPOT_DEFAULT_PROPERTIES[args.object_type] ?? []).map((p) => `properties.${p}`), "updatedAt"],
+    label: `hubspot ${args.object_type}`,
+    counts: ["properties.industry", "properties.city"],
+    receipt: receiptLines(page, args.object_type, page.paging?.next?.after),
+    tool: "hubspot_search",
+    maxTokens,
+  });
 }
 
-function receiptLines(page: HubSpotSearchResponse, objectType: string, withheld: string, after?: string): string[] {
+function receiptLines(page: HubSpotSearchResponse, objectType: string, after?: string): string[] {
   const receipt = [
     `# cq receipt: hubspot_search · object_type=${objectType} · upstream_page=${page.results.length} · total=${page.total}`,
     "# selected fields are shown below; recover omitted record detail with hubspot_get_record(object_type, id, properties)",
     "# not returned by search: engagement history, associated deals/tickets · use dedicated tools before claiming either",
-    `# withheld by policy: ${withheld}`,
   ];
   if (after) receipt.push(`# next page available: call hubspot_search with after="${after}"`);
   return receipt;
 }
 
-function renderEmptySearch(page: HubSpotSearchResponse, maxTokens: number): string {
-  const text = [...receiptLines(page, "records", "none"), "# hubspot records: showing 0 of 0"].join("\n");
+function renderEmptySearch(page: HubSpotSearchResponse, maxTokens: number): Rendered {
+  const text = [...receiptLines(page, "records"), "# hubspot records: showing 0 of 0"].join("\n");
   if (tokenCount(text) > maxTokens) throw new Error("token budget is too small to render the ContextQuant receipt");
-  return text;
+  return emptyRendered(text);
 }
 
 /** Project record detail response to requested properties */
@@ -217,7 +195,7 @@ export const hubspotAdapter: Adapter = {
         return (inp.filterGroups ?? []).flatMap((g) => g.filters.map((f) => `properties.${f.propertyName}`));
       },
       redactedPaths: [],
-      defaultBudgetTokens: 1_500,
+      defaultBudgetTokens: DEFAULT_BUDGET_TOKENS,
     };
   },
 };

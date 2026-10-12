@@ -33,7 +33,7 @@ describe("fields", () => {
   test("requested fields missing from the data are declared", () => {
     const r = shape(people, { fields: ["basic_profile.name", "nope.field"] });
     expect(r.stats!.notInData).toEqual(["nope.field"]);
-    expect(r.text).toContain("# not in data: nope.field");
+    expect(r.text).toContain("# not in data (null or missing in every record): nope.field");
   });
   test("fields come from the search filters", () => {
     const filters = { op: "and", conditions: [{ field: "basic_profile.location.full_location", type: "(.)", value: "SF" }] };

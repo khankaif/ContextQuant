@@ -10,9 +10,12 @@ export type TraceEvent = {
   inputTokens: number;
   outputTokens: number;
   shownRows: number;
+  /** Upstream rows not in this page (reachable by paging). */
   omittedRows: number;
+  /** Rows in this page cut by the token budget (reachable only with a bigger budget_tokens). */
+  budgetCutRows?: number;
   withheldFieldCount: number;
-  recoveryKind?: "next_page" | "detail";
+  recoveryKind?: "next_page" | "budget" | "detail";
   latencyMs: number;
   error?: string;
 };
@@ -29,6 +32,7 @@ export class TraceWriter {
     };
 
     this.buffer.push(fullEvent);
+    if (this.buffer.length > 1_000) this.buffer.shift(); // in-memory copy is for tests; the log file keeps everything
 
     if (this.logFile) {
       try {

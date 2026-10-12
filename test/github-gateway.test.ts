@@ -21,8 +21,8 @@ const page: GithubSearchResponse = {
 
 describe("GitHub gateway receipt", () => {
   test("declares withheld data and a precise next-page recovery", () => {
-    const text = renderGithubSearch(page, { owner: "acme", repo: "api", query: "is:open", page: 1 }, 1_500);
-    expect(text).toContain("withheld by policy:");
+    const { text } = renderGithubSearch(page, { owner: "acme", repo: "api", query: "is:open", page: 1 }, 1_500);
+    expect(text).toContain("left out fields:");
     expect(text).toContain("body");
     expect(text).toContain("github_get_issue(owner, repo, issue_number, fields)");
     expect(text).toContain("call github_search_issues with page=2");
@@ -31,14 +31,14 @@ describe("GitHub gateway receipt", () => {
   });
 
   test("warns when GitHub says a search is incomplete", () => {
-    expect(renderGithubSearch({ ...page, incomplete_results: true }, { owner: "acme", repo: "api", query: "is:open" })).toContain("search incomplete");
+    expect(renderGithubSearch({ ...page, incomplete_results: true }, { owner: "acme", repo: "api", query: "is:open" }).text).toContain("search incomplete");
   });
 
   test("returns a truthful receipt for an empty search", () => {
-    const text = renderGithubSearch({ total_count: 0, items: [] }, { owner: "acme", repo: "api", query: "is:open" });
+    const { text } = renderGithubSearch({ total_count: 0, items: [] }, { owner: "acme", repo: "api", query: "is:open" });
     expect(text).toContain("upstream_page=0 · total=0");
     expect(text).toContain("showing 0 of 0");
-    expect(text).toContain("withheld by policy: none");
+    expect(text).not.toContain("left out fields");
   });
 
   test("rejects query text that attempts to override the tool's repository scope", async () => {
@@ -84,7 +84,26 @@ describe("GitHub gateway receipt", () => {
   });
 
   test("respects caller-specified budget_tokens", () => {
-    const text = renderGithubSearch(page, { owner: "acme", repo: "api", query: "is:open", budget_tokens: 500 });
+    const { text } = renderGithubSearch(page, { owner: "acme", repo: "api", query: "is:open", budget_tokens: 500 });
     expect(o200k.count(text)).toBeLessThanOrEqual(500);
+  });
+
+  test("rows cut by budget name the exact budget_tokens that shows them all", () => {
+    const cut = renderGithubSearch(page, { owner: "acme", repo: "api", query: "is:open", budget_tokens: 500 }).text;
+    const need = Number(cut.match(/budget_tokens=(\d+) to see all 30/)?.[1]);
+    expect(need).toBeGreaterThan(500);
+    const full = renderGithubSearch(page, { owner: "acme", repo: "api", query: "is:open", budget_tokens: need }).text;
+    expect(full).toContain("showing 30 of 30");
+    expect(full).not.toContain("records not shown");
+  });
+
+  test("left-out list names real fields once and only counts URL/ID noise", () => {
+    const { text } = renderGithubSearch(page, { owner: "acme", repo: "api", query: "is:open" });
+    const line = text.split("\n").find((l) => l.startsWith("# left out fields:"))!;
+    expect(text.split("\n").filter((l) => l.includes("body")).length).toBe(1);
+    expect(line).toContain("body");
+    expect(line).toContain("reactions");
+    expect(line).toMatch(/\+\d+ URL\/ID fields/);
+    expect(line).not.toContain("avatar_url");
   });
 });

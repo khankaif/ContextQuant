@@ -80,17 +80,20 @@ export function shape(input: string, opts: ShapeOptions = {}): ShapeResult {
   const meta = Object.entries(found.meta).map(([k, v]) => `${k}=${metaValue(v)}`);
   const countLines = (opts.counts ?? []).map((f) => countLine(cleaned, f, total)).filter((l) => l !== undefined);
 
-  const notes = (n: number, shortList: boolean): string[] => {
+  // Squeeze levels when the budget is tight: 0 everything, 1 left-out list shortened to a number,
+  // 2 count lines dropped too (and said so). Rows always go first.
+  const notes = (n: number, level: number): string[] => {
     const out = [`# ${label}: showing ${n} of ${total}${meta.length ? ` · ${meta.join(" · ")}` : ""}`];
-    if (leftOut.length) out.push(`# left out fields: ${shortList ? `${leftOut.length} (list too long for budget)` : leftOut.join(", ")}`);
-    if (notInData.length) out.push(`# not in data: ${notInData.join(", ")}`);
+    if (leftOut.length) out.push(`# left out fields: ${level >= 1 ? `${leftOut.length} (list too long for budget)` : nameFields(leftOut)}`);
+    if (notInData.length) out.push(`# not in data (null or missing in every record): ${notInData.join(", ")}`);
     if (n < total) out.push(`# ${total - n} records not shown${opts.more ? ` · ${opts.more}` : ""}`);
-    out.push(...countLines);
+    if (level < 2) out.push(...countLines);
+    else if (countLines.length) out.push(`# ${countLines.length} count lines left out for budget`);
     if (aliased) out.push("# @1, @2… are short ids; pass them unchanged in tool calls");
     return out;
   };
-  const render = (n: number, shortList = false) =>
-    [...notes(n, shortList), ...(n ? head : []), ...body.slice(0, n)].join("\n");
+  const render = (n: number, level = 0) =>
+    [...notes(n, level), ...(n ? head : []), ...body.slice(0, n)].join("\n");
 
   let n = total;
   let text: string;
@@ -101,7 +104,7 @@ export function shape(input: string, opts: ShapeOptions = {}): ShapeResult {
     const max = opts.maxTokens;
     // Count each row once, take the prefix that fits, then verify the real total
     // (BPE can merge across lines, so the sum is close but not exact).
-    let used = tok.count([...notes(total, false), ...head].join("\n"));
+    let used = tok.count([...notes(total, 0), ...head].join("\n"));
     n = 0;
     for (const line of body) {
       used += tok.count(line) + 1;
@@ -110,11 +113,11 @@ export function shape(input: string, opts: ShapeOptions = {}): ShapeResult {
     }
     while (n > 0 && tok.count(render(n)) > max) n--;
     text = render(n);
-    if (tok.count(text) > max) text = render(n, true);
-    // ponytail: last resort is one short line without meta; budgets under ~20 tokens still exceed it.
+    for (let level = 1; level <= 2 && tok.count(text) > max; level++) text = render(n, level);
+    // ponytail: last resort is one short line without meta; budgets under ~40 tokens still exceed it.
     if (tok.count(text) > max) {
       n = 0;
-      text = `# ${label}: showing 0 of ${total}; budget too small, raise maxTokens`;
+      text = `# ${label}: showing 0 of ${total}; budget too small${opts.more ? ` · ${opts.more}` : ", raise maxTokens"}`;
     }
   }
 
@@ -232,6 +235,15 @@ function diffPaths(records: Obj[], fields: string[]): { leftOut: string[]; notIn
   collapse(tree, "");
   const notInData = fields.filter((f) => ![...leaves].some((l) => covers(f, l)));
   return { leftOut, notInData };
+}
+
+// Name the left-out fields an agent could ask about; only count API links and internal ids
+// (url, html_url, node_id…), which on GitHub are half the list and never answer a question.
+function nameFields(paths: string[]): string {
+  const noise = (p: string) => /(?:^|_)(?:url|id)$/i.test(p.slice(p.lastIndexOf(".") + 1));
+  const named = paths.filter((p) => !noise(p));
+  const n = paths.length - named.length;
+  return [...named, ...(n ? [`+${n} URL/ID fields`] : [])].join(", ");
 }
 
 // "# count by <path> (all N records in this response): value k · …", most common first.

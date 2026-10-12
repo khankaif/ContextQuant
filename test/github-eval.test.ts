@@ -39,7 +39,7 @@ describe("Phase 2: GitHub 4-Arm Evaluation", () => {
         };
       }
       case "cq": {
-        const text = renderGithubSearch(fixture, { owner: "acme", repo: "web-framework", query: "is:open" }, 2_000);
+        const { text } = renderGithubSearch(fixture, { owner: "acme", repo: "web-framework", query: "is:open" }, 2_000);
         const tokens = o200k.count(text);
         return {
           arm: "cq",
@@ -47,13 +47,13 @@ describe("Phase 2: GitHub 4-Arm Evaluation", () => {
           outputTokens: tokens,
           tokenSavingsPct: Math.round(((rawTokens - tokens) / rawTokens) * 100),
           shownRows: fixture.items.length,
-          withheldFieldsDeclared: text.includes("withheld by policy:"),
+          withheldFieldsDeclared: text.includes("left out fields:"),
           recoveryToolDeclared: text.includes("github_get_issue"),
         };
       }
       case "cq_budgeted": {
         const budget = 450;
-        const text = renderGithubSearch(fixture, { owner: "acme", repo: "web-framework", query: "is:open", budget_tokens: budget }, budget);
+        const { text } = renderGithubSearch(fixture, { owner: "acme", repo: "web-framework", query: "is:open", budget_tokens: budget }, budget);
         const tokens = o200k.count(text);
         const shownMatch = text.match(/showing (\d+) of/);
         const shownRows = shownMatch ? Number(shownMatch[1]) : fixture.items.length;
@@ -63,7 +63,7 @@ describe("Phase 2: GitHub 4-Arm Evaluation", () => {
           outputTokens: tokens,
           tokenSavingsPct: Math.round(((rawTokens - tokens) / rawTokens) * 100),
           shownRows,
-          withheldFieldsDeclared: text.includes("withheld by policy:"),
+          withheldFieldsDeclared: text.includes("left out fields:"),
           recoveryToolDeclared: text.includes("github_get_issue"),
         };
       }
@@ -93,7 +93,7 @@ describe("Phase 2: GitHub 4-Arm Evaluation", () => {
 
   test("demonstrates lossless multi-turn recovery via github_get_issue", () => {
     // Agent searches issues, sees memory leak issue #103 without body
-    const searchResult = renderGithubSearch(fixture, { owner: "acme", repo: "web-framework", query: "label:bug" });
+    const searchResult = renderGithubSearch(fixture, { owner: "acme", repo: "web-framework", query: "label:bug" }).text;
     expect(searchResult).toContain("103");
     expect(searchResult).toContain("Memory leak in WebSocket heartbeat interval timer");
     expect(searchResult).not.toContain("Retained size in `ws_heartbeats`");

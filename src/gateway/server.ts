@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { o200k } from "../tokens.ts";
+import { MAX_BUDGET_TOKENS } from "../adapters/receipt.ts";
 import { GITHUB_DETAIL_FIELDS, GithubClient, renderGithubIssue, renderGithubSearch } from "../adapters/github.ts";
 import { JIRA_DETAIL_FIELDS, JiraClient, renderJiraIssue, renderJiraSearch } from "../adapters/jira.ts";
 import {
@@ -36,7 +37,7 @@ export function createGateway(
       repo,
       query: z.string().min(1).max(512),
       page: z.number().int().min(1).max(34).optional(),
-      budget_tokens: z.number().int().min(256).max(8192).optional(),
+      budget_tokens: z.number().int().min(256).max(MAX_BUDGET_TOKENS).optional(),
       session_id: z.string().optional(),
     },
   }, async (args) => {
@@ -44,7 +45,8 @@ export function createGateway(
     const inputTokens = o200k.count(JSON.stringify(args));
     try {
       const page = await github.search(args);
-      const text = renderGithubSearch(page, args, args.budget_tokens);
+      const shaped = renderGithubSearch(page, args, args.budget_tokens);
+      const text = shaped.text;
       const outputTokens = o200k.count(text);
 
       const sessId = args.session_id ?? `${args.owner}/${args.repo}`;
@@ -56,10 +58,11 @@ export function createGateway(
         outcome: "shaped",
         inputTokens,
         outputTokens,
-        shownRows: page.items.length,
+        shownRows: shaped.shown,
         omittedRows: Math.max(0, page.total_count - page.items.length),
-        withheldFieldCount: 0,
-        recoveryKind: page.items.length < page.total_count ? "next_page" : undefined,
+        budgetCutRows: shaped.records - shaped.shown,
+        withheldFieldCount: shaped.leftOut,
+        recoveryKind: shaped.shown < shaped.records ? "budget" : page.items.length < page.total_count ? "next_page" : undefined,
         latencyMs: Math.round(performance.now() - t0),
       });
 
@@ -163,7 +166,7 @@ export function createGateway(
     inputSchema: {
       jql: z.string().min(1).max(1024),
       cursor: z.string().optional(),
-      budget_tokens: z.number().int().min(256).max(8192).optional(),
+      budget_tokens: z.number().int().min(256).max(MAX_BUDGET_TOKENS).optional(),
       session_id: z.string().optional(),
     },
   }, async (args) => {
@@ -171,7 +174,8 @@ export function createGateway(
     const inputTokens = o200k.count(JSON.stringify(args));
     try {
       const page = await jira.search(args);
-      const text = renderJiraSearch(page, args, args.budget_tokens);
+      const shaped = renderJiraSearch(page, args, args.budget_tokens);
+      const text = shaped.text;
       const outputTokens = o200k.count(text);
 
       const sessId = args.session_id ?? "jira_default";
@@ -183,10 +187,11 @@ export function createGateway(
         outcome: "shaped",
         inputTokens,
         outputTokens,
-        shownRows: page.issues.length,
+        shownRows: shaped.shown,
         omittedRows: Math.max(0, page.total - page.issues.length),
-        withheldFieldCount: 0,
-        recoveryKind: page.nextPageToken ? "next_page" : undefined,
+        budgetCutRows: shaped.records - shaped.shown,
+        withheldFieldCount: shaped.leftOut,
+        recoveryKind: shaped.shown < shaped.records ? "budget" : page.nextPageToken ? "next_page" : undefined,
         latencyMs: Math.round(performance.now() - t0),
       });
 
@@ -267,7 +272,7 @@ export function createGateway(
       object_type: z.enum(hubspotObjectTypes),
       after: z.string().optional(),
       properties: z.array(z.string()).optional(),
-      budget_tokens: z.number().int().min(256).max(8192).optional(),
+      budget_tokens: z.number().int().min(256).max(MAX_BUDGET_TOKENS).optional(),
       session_id: z.string().optional(),
     },
   }, async (args) => {
@@ -276,7 +281,8 @@ export function createGateway(
 
     try {
       const page = await hubspot.search(args);
-      const text = renderHubSpotSearch(page, args, args.budget_tokens);
+      const shaped = renderHubSpotSearch(page, args, args.budget_tokens);
+      const text = shaped.text;
       const outputTokens = o200k.count(text);
 
       const sessId = args.session_id ?? `hubspot_${args.object_type}`;
@@ -288,10 +294,11 @@ export function createGateway(
         outcome: "shaped",
         inputTokens,
         outputTokens,
-        shownRows: page.results.length,
+        shownRows: shaped.shown,
         omittedRows: Math.max(0, page.total - page.results.length),
-        withheldFieldCount: 0,
-        recoveryKind: page.paging?.next?.after ? "next_page" : undefined,
+        budgetCutRows: shaped.records - shaped.shown,
+        withheldFieldCount: shaped.leftOut,
+        recoveryKind: shaped.shown < shaped.records ? "budget" : page.paging?.next?.after ? "next_page" : undefined,
         latencyMs: Math.round(performance.now() - t0),
       });
 
