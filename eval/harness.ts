@@ -1,7 +1,6 @@
 // What each eval variant shows the model, the instructions, and the grader.
-import { peopleSearch, SAMPLE_QUERY } from "../bench/people.ts";
+import { peopleSearch, SAMPLE_QUERY, PEOPLE_BASE, PEOPLE_RENAME } from "../bench/people.ts";
 import { fieldsFromFilters, filterFields } from "../src/intent.ts";
-import { PEOPLE_BASE, PEOPLE_RENAME } from "../src/adapters/crustdata.ts";
 import { projectRecords, shape } from "../src/shape.ts";
 import { FIXTURE, type Case } from "./cases.ts";
 

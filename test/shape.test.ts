@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { peopleSearch } from "../bench/people.ts";
-import { AliasMap, fieldsFromFilters, isOpaqueId, o200k, PEOPLE_BASE, PEOPLE_RENAME, shape } from "../src/index.ts";
+import { peopleSearch, PEOPLE_BASE, PEOPLE_RENAME } from "../bench/people.ts";
+import { AliasMap, fieldsFromFilters, isOpaqueId, o200k, shape } from "../src/index.ts";
 
 const people = JSON.stringify(peopleSearch(25, 7));
 const rowsOf = (text: string) => text.split("\n").filter((l) => !l.startsWith("#")).map((l) => JSON.parse(l));

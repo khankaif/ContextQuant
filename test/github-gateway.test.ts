@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { GithubClient, renderGithubIssue, renderGithubSearch, type GithubSearchResponse } from "../src/gateway/github.ts";
+import type { Json } from "../src/shape.ts";
 import { o200k } from "../src/tokens.ts";
 
 const page: GithubSearchResponse = {
@@ -42,11 +43,48 @@ describe("GitHub gateway receipt", () => {
 
   test("rejects query text that attempts to override the tool's repository scope", async () => {
     const client = new GithubClient(undefined, (() => { throw new Error("must not fetch"); }) as unknown as typeof fetch);
-    await expect(client.search({ owner: "acme", repo: "api", query: "repo:other/private is:open" })).rejects.toThrow("must not contain repo:");
+    for (const badQuery of [
+      "repo:other/private is:open",
+      "(repo:other/private) bug",
+      "org:internal-inc leak",
+      "user:someone-else bug",
+      "is:pr open",
+      "test+repo:forbidden",
+      "-repo:other bug",
+    ]) {
+      await expect(client.search({ owner: "acme", repo: "api", query: badQuery })).rejects.toThrow("must not contain repo:");
+    }
   });
 
-  test("detail recovery returns only requested fields", () => {
-    const text = renderGithubIssue({ number: 7, body: "the detail", assignee: { login: "octocat" }, milestone: { title: "v1" } }, ["body", "assignee"]);
-    expect(text).toBe('{"number":7,"body":"the detail","assignee":{"login":"octocat"}}');
+  test("detail recovery returns only requested fields and prunes nested payloads", () => {
+    const rawIssue = {
+      number: 7,
+      body: "the detail",
+      assignee: {
+        login: "octocat",
+        id: 1,
+        avatar_url: "https://github.com/images/error/octocat_happy.gif",
+        gravatar_id: "",
+        html_url: "https://github.com/octocat",
+      },
+      milestone: { title: "v1.0", state: "open", description: "First release", creator: { login: "admin" } },
+      labels: [{ name: "bug", color: "f29513" }, { name: "triage" }],
+      reactions: { total_count: 5, "+1": 3, "-1": 0, laugh: 0, hooray: 0, confused: 0, heart: 2, rocket: 0, eyes: 0, url: "https://api..." },
+    };
+    const text = renderGithubIssue(rawIssue as unknown as Json, ["body", "assignee", "milestone", "labels", "reactions"]);
+    const parsed = JSON.parse(text);
+    expect(parsed).toEqual({
+      number: 7,
+      body: "the detail",
+      assignee: { login: "octocat" },
+      milestone: { title: "v1.0", state: "open" },
+      labels: ["bug", "triage"],
+      reactions: { total_count: 5, "+1": 3, "-1": 0, laugh: 0, hooray: 0, confused: 0, heart: 2, rocket: 0, eyes: 0 },
+    });
+  });
+
+  test("respects caller-specified budget_tokens", () => {
+    const text = renderGithubSearch(page, { owner: "acme", repo: "api", query: "is:open", budget_tokens: 500 });
+    expect(o200k.count(text)).toBeLessThanOrEqual(500);
   });
 });

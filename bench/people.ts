@@ -76,6 +76,21 @@ export const SAMPLE_QUERY = {
   },
 };
 
+/** Person-search defaults used by the synthetic benchmark fixture. */
+export const PEOPLE_BASE = [
+  "crustdata_person_id",
+  "basic_profile.name",
+  "basic_profile.current_title",
+  "basic_profile.location.raw",
+  "experience.employment_details.current.name",
+  "social_handles.professional_network_identifier.profile_url",
+];
+
+/** Request fields whose response paths differ in the fixture. */
+export const PEOPLE_RENAME: Record<string, string> = {
+  "basic_profile.location.full_location": "basic_profile.location.raw",
+};
+
 function mulberry32(a: number) {
   return () => {
     a = (a + 0x6d2b79f5) | 0;

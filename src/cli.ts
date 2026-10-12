@@ -1,9 +1,8 @@
 #!/usr/bin/env bun
 import { parseArgs } from "util";
 import { encode as toon } from "@toon-format/toon";
-import { peopleSearch, SAMPLE_QUERY } from "../bench/people.ts";
+import { peopleSearch, SAMPLE_QUERY, PEOPLE_BASE, PEOPLE_RENAME } from "../bench/people.ts";
 import { fieldsFromFilters, filterFields } from "./intent.ts";
-import { PEOPLE_BASE, PEOPLE_RENAME } from "./adapters/crustdata.ts";
 import { projectRecords, shape } from "./shape.ts";
 import { cl100k, o200k } from "./tokens.ts";
 

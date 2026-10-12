@@ -15,9 +15,8 @@
 import { tmpdir } from "node:os";
 import { mkdtempSync, rmSync, mkdirSync, existsSync, readFileSync, appendFileSync, writeFileSync, readdirSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { peopleSearch } from "../bench/people.ts";
+import { peopleSearch, PEOPLE_BASE, PEOPLE_RENAME } from "../bench/people.ts";
 import { fieldsFromFilters, filterFields } from "../src/intent.ts";
-import { PEOPLE_BASE, PEOPLE_RENAME } from "../src/adapters/crustdata.ts";
 import { projectRecords, shape, type Json } from "../src/shape.ts";
 import { o200k } from "../src/tokens.ts";
 
