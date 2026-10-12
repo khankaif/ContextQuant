@@ -1,17 +1,42 @@
 {
   "name": "contextquant",
-  "version": "0.2.0",
-  "description": "Shape structured tool output for AI agents: only the fields the query needs, a hard token budget, and a declared list of what was left out.",
+  "version": "0.3.0",
+  "description": "MCP proxy that shrinks tool results for AI agents and says exactly what it cut, with a tool to get it back.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/khankaif/ai-gzip.git"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "llm",
+    "agents",
+    "tokens",
+    "context",
+    "claude",
+    "proxy"
+  ],
   "type": "module",
   "module": "src/index.ts",
   "bin": {
+    "contextquant": "src/cli.ts",
     "cq": "src/cli.ts"
+  },
+  "files": [
+    "src",
+    "bench/people.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.1.0"
   },
   "scripts": {
     "test": "bun test",
     "bench": "bun src/cli.ts bench",
     "build": "bun build src/cli.ts --compile --outfile dist/cq",
-    "mcp": "bun src/gateway/server.ts"
+    "mcp": "bun src/cli.ts gateway"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",

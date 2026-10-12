@@ -6,6 +6,7 @@ node_modules/
 
 # Local working state: kept on disk, not in the repo
 .vibe-wise/
+docs/
 .legacy/_project.md
 .legacy/course_output/
 .legacy/skill.md

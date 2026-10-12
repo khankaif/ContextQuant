@@ -110,6 +110,14 @@ test("deterministic: same input and options give the same bytes", () => {
   expect(shape(people, opts).text).toBe(shape(people, opts).text);
 });
 
+test("offset with all fields returns the page, not the whole input", () => {
+  const input = JSON.stringify([{ a: 1 }, { a: 2 }, { a: 3 }]);
+  const r = shape(input, { offset: 2, ids: false });
+  expect(r.passthrough).toBeUndefined();
+  expect(r.text).toContain("(records 3–3)");
+  expect(r.text.split("\n").filter((l) => l.startsWith("{"))).toEqual(['{"a":3}']);
+});
+
 describe("counts", () => {
   test("counts every record by value, most common first, even rows cut by the budget", () => {
     const input = JSON.stringify({ items: [{ c: "b" }, { c: "a" }, { c: "a" }, { c: null }, { c: ["a", "a", "z"] }] });

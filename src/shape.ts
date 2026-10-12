@@ -1,3 +1,4 @@
+import { autoFields, constantFields } from "./auto.ts";
 import { AliasMap, isOpaqueId } from "./ids.ts";
 import { o200k, type Tokenizer } from "./tokens.ts";
 
@@ -5,8 +6,16 @@ export type Json = null | boolean | number | string | Json[] | { [k: string]: Js
 type Obj = { [k: string]: Json };
 
 export interface ShapeOptions {
-  /** Dotted paths to keep in each record (arrays are walked through). Default: all. */
-  fields?: string[];
+  /**
+   * Dotted paths to keep in each record (arrays are walked through), or "auto" to choose from the
+   * data: short values stay; long text, machine links and nested ids are left out (see auto.ts).
+   * Default: all.
+   */
+  fields?: string[] | "auto";
+  /** Print fields that are the same in every record once, in a note, not in each row. Default: on with fields "auto". */
+  hoist?: boolean;
+  /** Index of the first record to show, for paging through a cut response. Default 0. */
+  offset?: number;
   /** Hard cap on output tokens. Rows that don't fit are declared, never dropped silently. */
   maxTokens?: number;
   /** "json" = one compact JSON record per line (default). "tsv" = table; use only for models that pass the eval. */
@@ -57,10 +66,17 @@ export function shape(input: string, opts: ShapeOptions = {}): ShapeResult {
   if (!found) return { text: input, passthrough: "no_records" };
 
   const tok = opts.tokenizer ?? o200k;
-  const fields = opts.fields?.length ? opts.fields : undefined;
   const cleaned = found.records.map((r) => (clean(r) ?? {}) as Obj);
-  const picked = fields ? cleaned.map((r) => (pick(r, fields.map((f) => f.split("."))) ?? {}) as Obj) : cleaned;
+  const fields = opts.fields === "auto" ? autoFields(cleaned) : opts.fields?.length ? opts.fields : undefined;
+  const constants = fields && (opts.hoist ?? opts.fields === "auto") ? constantFields(cleaned, fields) : {};
+  const rowFields = fields?.filter((f) => !(f in constants));
+  const picked = rowFields ? cleaned.map((r) => (pick(r, rowFields.map((f) => f.split("."))) ?? {}) as Obj) : cleaned;
   const { leftOut, notInData } = fields ? diffPaths(cleaned, fields) : { leftOut: [], notInData: [] };
+  // Explicit fields already get "not in data"; when fields come from the data (or are all kept),
+  // say which ones were empty everywhere, and that a field missing from one row is empty there.
+  const fromData = opts.fields === "auto" || !fields;
+  const empty = fromData ? emptyEverywhere(found.records, cleaned) : [];
+  const ragged = fromData && hasRaggedRows(picked);
 
   const ids = opts.ids === false ? undefined : (opts.ids ?? new AliasMap());
   let aliased = 0;
@@ -76,37 +92,44 @@ export function shape(input: string, opts: ShapeOptions = {}): ShapeResult {
 
   const { head, body } = opts.format === "tsv" ? tsv(rows as Obj[]) : { head: [], body: rows.map((r) => JSON.stringify(r)) };
   const total = body.length;
+  const start = Math.min(Math.max(opts.offset ?? 0, 0), total);
+  const rest = body.slice(start);
   const label = opts.label ?? found.key ?? "records";
   const meta = Object.entries(found.meta).map(([k, v]) => `${k}=${metaValue(v)}`);
   const countLines = (opts.counts ?? []).map((f) => countLine(cleaned, f, total)).filter((l) => l !== undefined);
 
-  // Squeeze levels when the budget is tight: 0 everything, 1 left-out list shortened to a number,
-  // 2 count lines dropped too (and said so). Rows always go first.
+  // Squeeze levels when the budget is tight: 0 everything, 1 field lists shortened to a number and
+  // the ragged-row hint dropped, 2 count lines dropped too (and said so). Rows always go first.
   const notes = (n: number, level: number): string[] => {
-    const out = [`# ${label}: showing ${n} of ${total}${meta.length ? ` · ${meta.join(" · ")}` : ""}`];
+    const which = start ? ` (records ${start + 1}–${start + n})` : "";
+    const out = [`# ${label}: showing ${n} of ${total}${which}${meta.length ? ` · ${meta.join(" · ")}` : ""}`];
+    const same = Object.entries(constants);
+    if (same.length) out.push(`# same in every record: ${same.map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(" · ")}`);
+    if (empty.length) out.push(`# empty (null) in every record: ${level >= 1 ? `${empty.length} fields` : nameFields(empty)}`);
+    if (ragged && level < 1) out.push("# a field missing from a row is empty (null) in that record");
     if (leftOut.length) out.push(`# left out fields: ${level >= 1 ? `${leftOut.length} (list too long for budget)` : nameFields(leftOut)}`);
     if (notInData.length) out.push(`# not in data (null or missing in every record): ${notInData.join(", ")}`);
-    if (n < total) out.push(`# ${total - n} records not shown${opts.more ? ` · ${opts.more}` : ""}`);
+    if (start + n < total) out.push(`# ${total - start - n} records not shown${opts.more ? ` · ${opts.more}` : ""}`);
     if (level < 2) out.push(...countLines);
     else if (countLines.length) out.push(`# ${countLines.length} count lines left out for budget`);
     if (aliased) out.push("# @1, @2… are short ids; pass them unchanged in tool calls");
     return out;
   };
   const render = (n: number, level = 0) =>
-    [...notes(n, level), ...(n ? head : []), ...body.slice(0, n)].join("\n");
+    [...notes(n, level), ...(n ? head : []), ...rest.slice(0, n)].join("\n");
 
-  let n = total;
+  let n = rest.length;
   let text: string;
   if (opts.maxTokens === undefined) {
     text = render(n);
-    if (!fields && text.length >= input.length) return { text: input, passthrough: "no_gain" };
+    if (!fields && start === 0 && text.length >= input.length) return { text: input, passthrough: "no_gain" };
   } else {
     const max = opts.maxTokens;
     // Count each row once, take the prefix that fits, then verify the real total
     // (BPE can merge across lines, so the sum is close but not exact).
     let used = tok.count([...notes(total, 0), ...head].join("\n"));
     n = 0;
-    for (const line of body) {
+    for (const line of rest) {
       used += tok.count(line) + 1;
       if (used > max) break;
       n++;
@@ -161,6 +184,41 @@ function findRecords(root: Json): { records: Obj[]; key?: string; meta: Obj } | 
     node = node[step]!;
   }
   return { records: best.records, key: best.path.at(-1), meta };
+}
+
+// Paths that are null, "", [] or {} wherever they appear and never hold a value anywhere.
+function emptyEverywhere(raw: Obj[], cleaned: Obj[]): string[] {
+  const empties = new Set<string>();
+  const walkRaw = (v: Json, path: string[]) => {
+    if (clean(v) === undefined) {
+      if (path.length) empties.add(path.join("."));
+    } else if (Array.isArray(v)) v.forEach((x) => walkRaw(x, path));
+    else if (isObj(v)) for (const [k, c] of Object.entries(v)) walkRaw(c, [...path, k]);
+  };
+  const filled = new Set<string>();
+  const walkFilled = (v: Json, path: string[]) => {
+    if (Array.isArray(v)) v.forEach((x) => walkFilled(x, path));
+    else if (isObj(v)) for (const [k, c] of Object.entries(v)) walkFilled(c, [...path, k]);
+    else for (let i = 1; i <= path.length; i++) filled.add(path.slice(0, i).join("."));
+  };
+  raw.forEach((r) => walkRaw(r, []));
+  cleaned.forEach((r) => walkFilled(r, []));
+  return [...empties].filter((p) => !filled.has(p));
+}
+
+// True when some row lacks a field another row has (after empty values were dropped).
+function hasRaggedRows(rows: Obj[]): boolean {
+  const keys = rows.map((r) => {
+    const out: string[] = [];
+    const walk = (v: Json, path: string) => {
+      if (isObj(v)) for (const [k, c] of Object.entries(v)) walk(c, path ? `${path}.${k}` : k);
+      else out.push(path);
+    };
+    walk(r, "");
+    return new Set(out);
+  });
+  const all = new Set(keys.flatMap((k) => [...k]));
+  return keys.some((k) => k.size < all.size);
 }
 
 // Drop null, "", [] and {} recursively. Inside arrays an emptied item becomes null to keep positions.
