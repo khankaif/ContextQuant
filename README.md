@@ -31,7 +31,7 @@ through cq:       5,556 tokens  (−85.3%, all 18 issues shown)
 Needs [Bun](https://bun.sh) 1.1+.
 
 ```bash
-git clone https://github.com/khankaif/ai-gzip.git && cd ai-gzip && bun install
+git clone https://github.com/khankaif/ContextQuant.git && cd ContextQuant && bun install
 
 # Claude Code: wrap any MCP server by putting it after --
 # (the token is needed for private repositories and write tools; public read-only search works without it)
@@ -39,7 +39,7 @@ claude mcp add --env GITHUB_PERSONAL_ACCESS_TOKEN=ghp_... github-cq \
   -- bun "$PWD/src/cli.ts" proxy -- npx -y @modelcontextprotocol/server-github
 ```
 
-Any MCP client works the same way: the command is `bun /path/to/ai-gzip/src/cli.ts proxy -- <the server's own command>`.
+Any MCP client works the same way: the command is `bun /path/to/ContextQuant/src/cli.ts proxy -- <the server's own command>`.
 Environment variables (API tokens) are passed through to the wrapped server. Each shaped call
 logs its saving to stderr: `contextquant search_issues: 37903 → 5556 tokens (o200k)`.
 
