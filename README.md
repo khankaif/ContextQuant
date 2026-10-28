@@ -125,7 +125,8 @@ correctly through ContextQuant. These are spot checks, not a benchmark: one mode
 
 The 6 made-up answers are one trap: without the left-out note, Gemma answered "What is X's headline?"
 with X's job title in every run; with the note it said the field wasn't shown. Caveats: synthetic data
-and 36 questions (about ±18 points for small differences).
+and 36 questions (about ±18 points for small differences). Raw run results aren't committed;
+`eval/run-all.sh` regenerates them under `.claude/hillclimb/` (needs model API keys in `.env`).
 
 ## When to skip it
 
@@ -164,7 +165,7 @@ bun run bench            # token comparison on the people fixture (incl. TOON)
 eval/run-all.sh          # accuracy eval; bun eval/summary.ts prints the tables
 ```
 
-v1 was a C dictionary compressor ([`.legacy/c/`](.legacy/c)). Measured with real tokenizers it saved
+v1 was a C dictionary compressor ([`only-c` branch](https://github.com/khankaif/ContextQuant/tree/only-c)). Measured with real tokenizers it saved
 nothing (−4.2% cl100k, +1.6% o200k): rare symbols cost more tokens than the words they replaced.
 That result is why this version picks fields instead of compressing text.
 
