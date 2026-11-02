@@ -26,20 +26,44 @@ through cq:       5,556 tokens  (−85.3%, all 18 issues shown)
 …
 ```
 
+## What it's for
+
+Any MCP tool that returns a JSON list of records, where an agent needs a few fields from many rows:
+
+- **Issue and ticket triage**: GitHub, Jira, Linear or Sentry searches. "Which open auth bugs are unassigned?"
+  needs number, title, labels and assignee, not 30 issue bodies and 60 API links per issue.
+- **People and company search**: CRM and enrichment APIs (HubSpot, Apollo-style search) return 50+
+  fields per profile; the agent filters on five.
+- **Database and log queries**: `SELECT *` style results from SQL or observability MCP servers,
+  where most columns repeat or are empty.
+- **Long agent sessions**: every result stays under Claude Code's 10,000-token warning, so a session
+  makes more calls before its context fills up.
+
+Each cut is declared, so the agent doesn't hallucinate a field it can't see (see Measured), and
+`contextquant_more` gets the next page or a left-out field in one call.
+
 ## Quick start
 
-Needs [Bun](https://bun.sh) 1.1+.
+Needs Node 20+. No install step: `npx` fetches it.
 
 ```bash
-git clone https://github.com/khankaif/ContextQuant.git && cd ContextQuant && bun install
-
 # Claude Code: wrap any MCP server by putting it after --
 # (the token is needed for private repositories and write tools; public read-only search works without it)
 claude mcp add --env GITHUB_PERSONAL_ACCESS_TOKEN=ghp_... github-cq \
-  -- bun "$PWD/src/cli.ts" proxy -- npx -y @modelcontextprotocol/server-github
+  -- npx -y contextquant proxy -- npx -y @modelcontextprotocol/server-github
 ```
 
-Any MCP client works the same way: the command is `bun /path/to/ContextQuant/src/cli.ts proxy -- <the server's own command>`.
+Any MCP client works the same way: the command is `npx -y contextquant proxy -- <the server's own command>`.
+
+From source (needs [Bun](https://bun.sh) 1.1+): `git clone https://github.com/khankaif/ContextQuant.git && cd ContextQuant && bun install`, then use `bun src/cli.ts` in place of `npx -y contextquant`.
+
+Remote (Streamable HTTP) servers are wrapped with `--url`, e.g. GitHub's hosted MCP server:
+
+```bash
+claude mcp add github-cq -- bun "$PWD/src/cli.ts" proxy \
+  --url https://api.githubcopilot.com/mcp/ --header "Authorization: Bearer ghp_..."
+```
+
 Environment variables (API tokens) are passed through to the wrapped server. Each shaped call
 logs its saving to stderr: `contextquant search_issues: 37903 → 5556 tokens (o200k)`.
 
@@ -66,12 +90,15 @@ unchanged, as do results that wouldn't get smaller and results whose tool declar
 ## Configure (optional)
 
 ```bash
-bun src/cli.ts proxy --budget 8000 --config contextquant.json -- <server command>
+npx -y contextquant proxy --budget 8000 --config contextquant.json -- <server command>
 ```
 
 ```json
 {
   "budget_tokens": 8000,
+  "long_text_chars": 200,
+  "keep_responses": 50,
+  "timeout_seconds": 600,
   "tools": {
     "search_issues": { "fields": ["number", "title", "state", "labels.name", "assignee.login"], "counts": ["labels.name", "assignee.login"] },
     "get_file_contents": { "skip": true }
@@ -82,6 +109,9 @@ bun src/cli.ts proxy --budget 8000 --config contextquant.json -- <server command
 The default budget is 8,000 tokens per result (o200k), aiming under Claude Code's 10,000-token
 warning; Claude's own tokenizer counts somewhat differently, so lower it if you see the warning.
 Per-tool `fields` replaces the automatic choice, `counts` adds value counts, `skip` passes a tool through.
+`long_text_chars` (global or per tool) is the average length above which a text field counts as long and is
+left out; `keep_responses` is how many original responses `contextquant_more` can still reach;
+`timeout_seconds` is how long a call to the wrapped server may take. The values above are the defaults.
 
 ## Measured
 
@@ -94,6 +124,7 @@ All token counts use a real tokenizer (o200k), not a characters-per-token estima
 | Proxy, no config | reference GitHub MCP server, 18 issues | 37,903 | 5,556 | 85.3% |
 | Proxy, no config | reference GitHub MCP server, 30 issues (`oven-sh/bun` crashes) | 66,234 | 6,477 | 90.2% |
 | Proxy, no config | GitHub search, 30 issues (MCP SDK bugs) | 68,815 | 7,802 | 88.7% |
+| Proxy `--url`, no config | GitHub's hosted MCP server, 30 issues (MCP SDK bugs) | 70,393 | 7,749 | 89.0% |
 | Built-in gateway, tuned fields | 30-issue pages from vscode, rust, go, bun, nacos | 46k–91k | 2.8k–3.9k | 93.9–95.7% |
 
 In the gateway runs a script compared every shown value (title, author, assignee, labels) and every
@@ -149,17 +180,17 @@ These were not measured on the same payloads; numbers in each project's README u
 
 ## Also in this repo
 
-- **Built-in gateway** (`bun src/cli.ts gateway`): GitHub issues, Jira and HubSpot CRM tools with hand-tuned
+- **Built-in gateway** (`npx -y contextquant gateway`): GitHub issues, Jira and HubSpot CRM tools with hand-tuned
   fields, counts and detail tools. GitHub needs no token for public repositories (`GITHUB_TOKEN` raises
   rate limits); Jira and HubSpot need credentials and have only been tested against fixtures.
 - **Library**: `import { shape, shapeToolText } from "./src/index.ts"`, e.g.
   `shape(responseText, { fields: "auto", maxTokens: 4000 })`.
-- **CLI**: `bun src/cli.ts shape <file> --fields a,b.c --max-tokens 1500`, `bun src/cli.ts bench`.
+- **CLI**: `npx -y contextquant shape <file> --fields a,b.c --max-tokens 1500`, `npx -y contextquant bench`.
 
 ## Development
 
 ```bash
-bun test                 # 77 tests, including stress tests and an end-to-end proxy test
+bun test                 # 78 tests, including stress tests and an end-to-end proxy test
 bunx tsc --noEmit -p .
 bun run bench            # token comparison on the people fixture (incl. TOON)
 eval/run-all.sh          # accuracy eval; bun eval/summary.ts prints the tables

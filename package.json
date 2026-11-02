@@ -20,23 +20,26 @@
   "type": "module",
   "module": "src/index.ts",
   "bin": {
-    "contextquant": "src/cli.ts",
-    "cq": "src/cli.ts"
+    "contextquant": "dist/cli.js",
+    "cq": "dist/cli.js"
   },
   "files": [
+    "dist",
     "src",
     "bench/people.ts",
     "README.md",
     "LICENSE"
   ],
   "engines": {
-    "bun": ">=1.1.0"
+    "node": ">=20"
   },
   "scripts": {
     "test": "bun test",
     "bench": "bun src/cli.ts bench",
     "build": "bun build src/cli.ts --compile --outfile dist/cq",
-    "mcp": "bun src/cli.ts gateway"
+    "mcp": "bun src/cli.ts gateway",
+    "build:node": "bun build src/cli.ts --target node --outfile dist/cli.js",
+    "prepublishOnly": "bun test && bun run build:node"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",

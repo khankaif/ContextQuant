@@ -33,6 +33,13 @@ describe("shapeToolText (auto policy)", () => {
     expect(out.after).toBeLessThan(out.before / 3);
   });
 
+  test("long_text_chars moves the long-text cutoff, globally or per tool", () => {
+    const row = (cfg: object) => JSON.parse(shapeToolText(page, "search_issues", cfg, new ResponseStore())!.text.split("\n").find((l) => l.startsWith("{"))!);
+    expect(row({ long_text_chars: 2000 })).toHaveProperty("body");
+    expect(row({ long_text_chars: 10 })).not.toHaveProperty("title");
+    expect(row({ long_text_chars: 10, tools: { search_issues: { long_text_chars: 2000 } } })).toHaveProperty("body");
+  });
+
   test("fields null everywhere are declared, and a field missing from a row is explained", () => {
     const out = shapeToolText(page, "search_issues", {}, new ResponseStore())!;
     expect(out.text).toContain("# empty (null) in every record: assignee");

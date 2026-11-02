@@ -29,6 +29,8 @@ export interface ShapeOptions {
   more?: string;
   /** Dotted paths to count values of, over every record (before any budget cut), so the model reads counts instead of counting. */
   counts?: string[];
+  /** With fields "auto": string fields averaging more characters than this are left out. Default 200. */
+  longText?: number;
 }
 
 export interface ShapeStats {
@@ -67,7 +69,7 @@ export function shape(input: string, opts: ShapeOptions = {}): ShapeResult {
 
   const tok = opts.tokenizer ?? o200k;
   const cleaned = found.records.map((r) => (clean(r) ?? {}) as Obj);
-  const fields = opts.fields === "auto" ? autoFields(cleaned) : opts.fields?.length ? opts.fields : undefined;
+  const fields = opts.fields === "auto" ? autoFields(cleaned, opts.longText) : opts.fields?.length ? opts.fields : undefined;
   const constants = fields && (opts.hoist ?? opts.fields === "auto") ? constantFields(cleaned, fields) : {};
   const rowFields = fields?.filter((f) => !(f in constants));
   const picked = rowFields ? cleaned.map((r) => (pick(r, rowFields.map((f) => f.split("."))) ?? {}) as Obj) : cleaned;

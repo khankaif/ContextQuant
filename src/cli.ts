@@ -1,5 +1,6 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import { parseArgs } from "util";
+import { readFileSync } from "fs";
 import { encode as toon } from "@toon-format/toon";
 import { peopleSearch, SAMPLE_QUERY, PEOPLE_BASE, PEOPLE_RENAME } from "../bench/people.ts";
 import { fieldsFromFilters, filterFields } from "./intent.ts";
@@ -9,7 +10,8 @@ import pkg from "../package.json";
 
 const USAGE = `usage:
   cq proxy [--budget N] [--config file.json] -- <command> [args...]
-                    wrap any stdio MCP server; its tool results come back shaped
+  cq proxy [--budget N] [--config file.json] --url <url> [--header "Name: value"]...
+                    wrap any MCP server (local command or remote URL); its tool results come back shaped
   cq gateway        the built-in GitHub / Jira / HubSpot MCP server
   cq shape <file|-> [--fields a,b.c] [--people-query <json>] [--max-tokens N]
                     [--format json|tsv] [--no-ids] [--label name] [--more text]
@@ -18,7 +20,7 @@ const USAGE = `usage:
 
 
 const { values: o, positionals } = parseArgs({
-  args: Bun.argv.slice(2),
+  args: process.argv.slice(2),
   allowPositionals: true,
   options: {
     fields: { type: "string" },
@@ -32,6 +34,8 @@ const { values: o, positionals } = parseArgs({
     seed: { type: "string" },
     budget: { type: "string" },
     config: { type: "string" },
+    url: { type: "string" },
+    header: { type: "string", multiple: true },
   },
 });
 
@@ -51,12 +55,19 @@ const [cmd, arg] = positionals;
 if (cmd === "proxy") {
   const { ProxyConfigSchema, runProxy } = await import("./proxy.ts");
   const [command, ...args] = positionals.slice(1);
-  if (!command) fail("missing the MCP server command; put it after --, e.g. cq proxy -- npx -y some-mcp-server");
+  if (!command && !o.url) fail("missing the MCP server: put its command after --, or pass --url");
+  if (command && o.url) fail("pass either --url or a command after --, not both");
+  const headers: Record<string, string> = {};
+  for (const h of o.header ?? []) {
+    const i = h.indexOf(":");
+    if (i < 1) fail(`bad --header (want "Name: value"): ${h}`);
+    headers[h.slice(0, i).trim()] = h.slice(i + 1).trim();
+  }
   let cfg = {};
   if (o.config) {
     let json: unknown;
     try {
-      json = JSON.parse(await Bun.file(o.config).text());
+      json = JSON.parse(readFileSync(o.config, "utf8"));
     } catch (e) {
       fail(`bad config ${o.config}: ${(e as Error).message}`);
     }
@@ -69,14 +80,14 @@ if (cmd === "proxy") {
     if (budget < 256) fail("--budget must be at least 256");
     cfg = { ...cfg, budget_tokens: budget };
   }
-  await runProxy(command, args, cfg, pkg.version);
+  await runProxy(o.url ? { url: o.url, headers } : { command: command!, args }, cfg, pkg.version);
 } else if (cmd === "gateway") {
   const { createGateway } = await import("./gateway/server.ts");
   const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
   await createGateway().connect(new StdioServerTransport());
 } else if (cmd === "shape") {
   if (!arg) fail("missing input file");
-  const input = arg === "-" ? await Bun.stdin.text() : await Bun.file(arg).text();
+  const input = readFileSync(arg === "-" ? 0 : arg, "utf8");
   if (o.format && o.format !== "json" && o.format !== "tsv") fail(`unknown format: ${o.format}`);
   const query = o["people-query"] ? JSON.parse(o["people-query"]) : undefined;
   const fields = query

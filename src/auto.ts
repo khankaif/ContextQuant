@@ -2,8 +2,8 @@ import type { Json } from "./shape.ts";
 
 type Obj = { [k: string]: Json };
 
-/** Longer average string than this is "long text" (issue bodies, descriptions): left out, recoverable. */
-const LONG_TEXT = 200;
+/** Default "long text" cutoff (issue bodies, descriptions): longer average strings are left out, recoverable. */
+export const LONG_TEXT = 200;
 
 // Every non-empty leaf value per dotted path, in first-seen order. Arrays are walked through.
 function leafValues(records: Obj[]): Map<string, Json[]> {
@@ -36,14 +36,14 @@ function machineUrl(s: string): boolean {
  * them to the next call. Everything left out is declared by shape() and recoverable, so the rule
  * can afford to be aggressive.
  */
-export function autoFields(records: Obj[]): string[] {
+export function autoFields(records: Obj[], longText = LONG_TEXT): string[] {
   const keep: string[] = [];
   for (const [path, values] of leafValues(records)) {
     const strings = values.filter((v): v is string => typeof v === "string");
     const avg = strings.length ? strings.reduce((a, s) => a + s.length, 0) / strings.length : 0;
     const nestedId = path.includes(".") && /(?:^|_)id$/i.test(path.slice(path.lastIndexOf(".") + 1));
     const links = strings.length > 0 && strings.filter(machineUrl).length * 2 > strings.length;
-    if (avg <= LONG_TEXT && !nestedId && !links) keep.push(path);
+    if (avg <= longText && !nestedId && !links) keep.push(path);
   }
   return keep;
 }

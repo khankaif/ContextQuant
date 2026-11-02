@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -22,17 +23,25 @@ import { o200k } from "./tokens.ts";
 export const MORE_TOOL = "contextquant_more";
 /** Stays under Claude Code's 10,000-token warning for one MCP tool result. */
 export const DEFAULT_PROXY_BUDGET = 8_000;
+export const DEFAULT_TIMEOUT_SECONDS = 600;
 
 export const ToolPolicySchema = z.object({
   /** Fields to keep; "auto" (default) picks them from the data. */
   fields: z.union([z.literal("auto"), z.array(z.string().min(1))]).optional(),
   counts: z.array(z.string().min(1)).optional(),
   budget_tokens: z.number().int().min(256).optional(),
+  long_text_chars: z.number().int().min(1).optional(),
   /** Pass this tool's results through untouched. */
   skip: z.boolean().optional(),
 }).strict();
 export const ProxyConfigSchema = z.object({
   budget_tokens: z.number().int().min(256).optional(),
+  /** With automatic fields, string fields averaging more characters than this are left out (recoverable). */
+  long_text_chars: z.number().int().min(1).optional(),
+  /** How many original responses contextquant_more can still reach. */
+  keep_responses: z.number().int().min(1).optional(),
+  /** How long to wait for the wrapped server per request. */
+  timeout_seconds: z.number().positive().optional(),
   tools: z.record(z.string(), ToolPolicySchema).optional(),
 }).strict();
 export type ToolPolicy = z.infer<typeof ToolPolicySchema>;
@@ -78,7 +87,8 @@ export function shapeToolText(
   const fields = view.fields ?? policy.fields ?? "auto";
   const offset = view.offset ?? 0;
   const budget = view.budget ?? policy.budget_tokens ?? cfg.budget_tokens ?? DEFAULT_PROXY_BUDGET;
-  const opts = { fields, counts: policy.counts, ids: false as const, label: tool, offset };
+  const longText = policy.long_text_chars ?? cfg.long_text_chars;
+  const opts = { fields, counts: policy.counts, ids: false as const, label: tool, offset, longText };
   const probe = shape(text, opts).passthrough;
   if (probe === "not_json" || probe === "no_records") return undefined;
 
@@ -188,28 +198,37 @@ function sameJson(text: string, json: string): boolean {
   }
 }
 
-/** Run as an MCP server that wraps the MCP server started by `command`. */
-export async function runProxy(command: string, args: string[], cfg: ProxyConfig, version: string): Promise<void> {
+/** The MCP server to wrap: a local command (stdio) or a remote URL (Streamable HTTP). */
+export type Upstream = { command: string; args: string[] } | { url: string; headers: Record<string, string> };
+
+/** Run as an MCP server that wraps `target`. */
+export async function runProxy(target: Upstream, cfg: ProxyConfig, version: string): Promise<void> {
   const upstream = new Client({ name: "contextquant", version });
-  // Default env for stdio children is a short safe list; the wrapped server needs its tokens.
   const env = Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined));
-  await upstream.connect(new StdioClientTransport({ command, args, env, stderr: "inherit" }));
+  await upstream.connect(
+    "url" in target
+      // ponytail: Streamable HTTP only, with fixed headers; add SSE fallback or OAuth if a server needs it.
+      ? new StreamableHTTPClientTransport(new URL(target.url), { requestInit: { headers: target.headers } })
+      // Default env for stdio children is a short safe list; the wrapped server needs its tokens.
+      : new StdioClientTransport({ command: target.command, args: target.args, env, stderr: "inherit" }),
+  );
+  const name = "url" in target ? new URL(target.url).host : target.command;
   const caps = upstream.getServerCapabilities() ?? {};
   const info = upstream.getServerVersion();
 
   const server = new Server(
-    { name: `contextquant(${info?.name ?? command})`, version: info?.version ?? version },
+    { name: `contextquant(${info?.name ?? name})`, version: info?.version ?? version },
     {
       capabilities: { tools: { listChanged: true }, ...(caps.prompts ? { prompts: {} } : {}), ...(caps.resources ? { resources: {} } : {}) },
       instructions: upstream.getInstructions(),
     },
   );
-  const store = new ResponseStore();
+  const store = new ResponseStore(cfg.keep_responses);
   const outputSchema = new Map<string, boolean>();
   // If the wrapped server has its own contextquant_more, it wins and ours is not offered.
   let upstreamHasMore = false;
-  // ponytail: forwarded requests wait up to 10 minutes and progress notifications aren't relayed.
-  const slow = { timeout: 600_000 };
+  // ponytail: progress notifications aren't relayed, so slow tools rely on this timeout alone.
+  const slow = { timeout: (cfg.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS) * 1000 };
 
   server.setRequestHandler(ListToolsRequestSchema, async (req) => {
     const res = caps.tools ? await upstream.listTools(req.params) : { tools: [] };
