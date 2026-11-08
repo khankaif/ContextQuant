@@ -73,8 +73,25 @@ What fills the budget, looking at the output: `id` and `node_id` sit at the fron
 `html_url` (which already has the number), and each label carries `color`, `default` and
 `description`. Dropping those would fit more records. See [next.md](next.md).
 
-Competitor arms (headroom's `compress()`, mcp-trunc-proxy) are wired in `compare.ts --arms` but not
-run yet.
+### 3c. Against other tools, same five searches (2026-11-09)
+
+`bun bench/compare/compare.ts --arms raw,cq,trunc,headroom`. Default settings for each tool.
+
+| Tool | Tokens (5 searches) | Facts visible |
+|---|---|---|
+| raw | 373,363 | 100% |
+| ContextQuant 0.3.1 | 37,883 (−90%) | 90%, the rest declared and recoverable |
+| mcp-trunc-proxy 0.2.2 | 9,165 (−98%) | 3% |
+| headroom-ai 0.43.1 `compress()` | 312,290 (−16%) | 99% |
+
+- **mcp-trunc-proxy** stores anything over 80 KB and returns the first and last 60 lines of the
+  pretty-printed JSON, which is about one issue. Everything else is behind its grep/range tool.
+- **headroom** turned two searches into a compact table (MCP SDK 60k → 34k, vscode 83k → 48k) and
+  left the other three unchanged. Its result lists only `router:protected:user_message` for those, and
+  `protect_recent=0, target_ratio=0.2` (its most aggressive documented settings) changed nothing. The
+  result object gives no reason (`diagnostics: None`).
+- headroom compresses the messages sent to the model API, so in Claude Code it would only ever see a
+  result *after* the client saved it to a file. That's why it has no agent arm below.
 
 ## 4. Declaring cuts changes agent behaviour
 
@@ -141,10 +158,45 @@ model never sees the data unless it can run code on that file.
   Claude Code's reported cost for the graded runs: $6.51 ($6.13 Sonnet, $0.38 Haiku).
 - **6k vs 8k budget:** no real difference for Claude. Smaller pages mean slightly more recovery calls.
 
-What this does *not* show: how raw does when the agent can run `jq` on the spilled file (Claude Code
-with Bash, Cursor). That's the next comparison, and the honest claim until then is "agents without
-code execution", not "all agents". Also: 2 searches, 12 questions, one replay each, my own tasks.
-Competitor arms (headroom, mcp-trunc-proxy) not run yet.
+### 5b. With code execution, and against mcp-trunc-proxy (2026-11-09)
+
+Same 12 questions, 3 runs. "Shell" arms give the agent `Read`, `Grep` and a Bash limited to
+`jq grep head tail wc sort uniq cat` (Claude Code only; agy can't restrict commands that finely).
+
+**Without a shell** (all three models, 108 runs per arm):
+
+| Arm | Correct | Confidently wrong | Avg seconds (Haiku / Sonnet) | Cost (Haiku / Sonnet) |
+|---|---|---|---|---|
+| raw | 19/108 | 0 | 8 / 8 | $0.05 / $0.65 |
+| **ContextQuant** | **105/108** | **0** | **8 / 9** | $0.16 / $2.79 |
+| mcp-trunc-proxy | 93/108 | 6 | 25 / 18 | $0.23 / $2.13 |
+
+**With a read-only shell** (Haiku + Sonnet, 72 runs per arm):
+
+| Arm | Correct | Avg turns (Sonnet) | Avg seconds (Sonnet) | Cost (Haiku + Sonnet) |
+|---|---|---|---|---|
+| raw | 71/72 | 3.9 | 11 | **$1.22** |
+| ContextQuant | 71/72 | **2.7** | **8** | $2.97 |
+| mcp-trunc-proxy | 71/72 | 7.0 | 18 | $2.41 |
+
+What this says:
+
+- **With a shell, raw is as accurate and the cheapest.** Claude Code saves the big result to a file
+  and the agent pulls out a few values with `jq`, so little reaches its context. ContextQuant puts
+  ~8k tokens inline, which are re-read on every turn: 2.4× the cost on these tasks, for ~30% less time
+  and fewer turns. So ContextQuant doesn't save money for agents that can run code. It's for agents
+  that can't, and for speed.
+- **Without a shell, ContextQuant is the only arm that is both right and never wrong.** mcp-trunc-proxy
+  gets most answers through its grep tool but is 2–3× slower and gave 6 confident wrong answers, all
+  the same pattern: grep returns matching JSON lines with no record boundary, and the model attached
+  the line to the wrong issue (a label to #165520 instead of #165385; "macOS" to #3033). Declared,
+  per-record output avoids that.
+- **Misses with a shell:** ContextQuant's was arithmetic (Sonnet listed 18 + 7 unassigned, wrote 24);
+  raw's missed one of two labelled issues; mcp-trunc-proxy's claimed "linux" in a body that has none.
+- Per correct answer on Sonnet without a shell, mcp-trunc-proxy is cheaper ($0.063 vs $0.077): its
+  preview is small. ContextQuant is faster and has no wrong answers.
+
+Still: 2 searches, 12 questions, my own tasks, one replay each.
 
 Harness lessons, each found from a wrong grade and fixed before the numbers above:
 - `agy` loads globally configured MCP servers in every run; one model called the real GitHub server

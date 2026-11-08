@@ -14,7 +14,9 @@ measured on different data, so they aren't comparable to each other or to mine.
 | sqz, llmtrim, mcp-rtk, clov, mcpack | Small proxies with static presets or opaque handles, under ~35 stars | — |
 | MuleSoft MCP Payload Optimization ([doc](https://docs.mulesoft.com/gateway/latest/policies-included-mcp-payload-optimization)) | Enterprise gateway policy: cleanup, optional LLM call per response, TOON | No, and no recovery |
 
-Headroom is the closest. The concrete difference is field-level declarations ("left out: body,
+Measured on the same data (2026-11-09, [findings.md §3c, §5b](findings.md)): mcp-trunc-proxy is the
+closest in design and works with agents, but its grep tool loses record boundaries (6 wrong answers in
+108); headroom left 3 of 5 GitHub searches uncompressed. Headroom is the closest in reach. The concrete difference is field-level declarations ("left out: body,
 +66 URL/ID fields"), and headroom could add that in a release.
 
 ## Other ways around the problem

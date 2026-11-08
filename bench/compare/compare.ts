@@ -3,7 +3,7 @@
 //   bun bench/compare/compare.ts                         arms: raw, cq
 //   bun bench/compare/compare.ts --arms raw,cq,trunc,headroom
 //     trunc     npx -y mcp-trunc-proxy, wrapping the same replay server, default settings
-//     headroom  headroom compress() on the tool message (needs uv; HEADROOM_OFFLINE=1)
+//     headroom  headroom-ai 0.43.1 compress() on the tool message (needs uv)
 // Writes bench/out/compare/<arm>/<payload>.txt and prints a markdown table.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -21,7 +21,7 @@ const OUT = "bench/out/compare";
 const PROXIES: Record<string, string[]> = {
   raw: replay,
   cq: ["bun", "src/cli.ts", "proxy", "--", ...replay],
-  trunc: ["npx", "-y", "mcp-trunc-proxy", "--", ...replay],
+  trunc: ["npx", "-y", "mcp-trunc-proxy@0.2.2", "--", ...replay],
 };
 
 async function viaMcp(cmd: string[], q: string): Promise<string> {
@@ -36,8 +36,8 @@ async function viaMcp(cmd: string[], q: string): Promise<string> {
 }
 
 function viaHeadroom(file: string, q: string): string {
-  const p = Bun.spawnSync(["uv", "run", "--python", "3.13", "--with", "headroom-ai", "python", "-I", `${here}headroom_arm.py`, file, q],
-    { env: { ...process.env, HEADROOM_OFFLINE: "1" }, stderr: "pipe" });
+  const p = Bun.spawnSync(["uv", "run", "--python", "3.13", "--with", "headroom-ai==0.43.1", "python", "-I", `${here}headroom_arm.py`, file, q],
+    { stderr: "pipe" });
   if (p.exitCode !== 0) throw new Error(`headroom: ${p.stderr.toString().slice(-500)}`);
   return p.stdout.toString();
 }

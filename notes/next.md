@@ -18,17 +18,19 @@ with confidence intervals and without raising cache-priced cost, this is a libra
 FastMCP middleware or a headroom contribution), not a standalone tool. That result would still be
 worth publishing.
 
-### Status (2026-11-08)
+### Status (2026-11-09)
 
-Done: 3 models × 3 arms × 12 GitHub tasks × 3 runs, graded in code
-([findings.md §5](findings.md#5-agent-eval-on-live-github-data-2026-11-08)). Not done yet:
+Done: no-shell and shell arms, raw / ContextQuant / mcp-trunc-proxy, token comparison incl. headroom
+([findings.md §3c, §5, §5b](findings.md)). The headline that survived: **for agents without code
+execution, ContextQuant is the only arm that is both right and never confidently wrong; with code
+execution, raw + jq is as accurate and cheaper, ContextQuant is faster.** Not done yet:
 
-- **Raw with code execution.** Give the raw arm a shell (or `jq`) and see whether ContextQuant still
-  wins on correctness, calls and cost. This is the comparison that decides the headline.
-- **Competitor arms.** `bench/compare/compare.ts --arms raw,cq,trunc,headroom` is wired; running
-  third-party code needs an explicit go-ahead.
+- **Cut ContextQuant's cost when the agent has a shell.** The ~8k-token inline result is re-read every
+  turn. Options to test: a smaller default budget when the client can run code, or putting only the
+  receipt inline and the rows behind the handle. Measure with `--arms raw-shell,cq-shell`.
+- **Public benchmark questions** (MCP-Bench / MCP-Atlas) instead of my own 12.
 - **More models** via agy (Sonnet 4.6, GPT-OSS 120B) once its quota resets; the eval resumes.
-- **Prompt-cache-priced cost per correct answer.** Claude Code reports `total_cost_usd`; agy doesn't.
+- **Cost for agy runs.** Claude Code reports `total_cost_usd`; agy doesn't.
 
 ## Open questions
 

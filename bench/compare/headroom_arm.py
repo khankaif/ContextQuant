@@ -1,5 +1,5 @@
 # Run one captured tool result through headroom's compress(), as the tool message of a short agent turn.
-#   HEADROOM_OFFLINE=1 uv run --python 3.13 --with headroom-ai python -I bench/compare/headroom_arm.py <payload.txt> <query>
+#   uv run --python 3.13 --with headroom-ai==0.43.1 python -I bench/compare/headroom_arm.py <payload.txt> <query>
 # Prints the compressed tool message content to stdout.
 import json
 import sys

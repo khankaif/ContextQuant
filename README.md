@@ -137,17 +137,29 @@ count against GitHub's raw response: zero mismatches across six repositories. Sh
 page takes about 120 ms, mostly token counting.
 
 **Agent eval, live GitHub results replayed** (`eval/github-agent.ts`: 12 questions graded in code, 3 runs each,
-agents with the MCP server only, no shell or file access)
+against raw JSON and [mcp-trunc-proxy](https://github.com/marco-jardim/mcp_trunc_proxy) 0.2.2)
 
-| Model (client) | Raw | ContextQuant | Made-up answers |
+Agents with the MCP server only, no shell or file access (Gemini 3.8 Flash, Claude Haiku, Claude Sonnet):
+
+| | Correct | Confidently wrong | Seconds per question (Claude) |
 |---|---|---|---|
-| Gemini 3.8 Flash (agy) | 19/36 | 33/36 | 0 |
-| Claude Haiku (Claude Code) | 0/36 | 36/36 | 0 |
-| Claude Sonnet (Claude Code) | 0/36 | 36/36 | 0 |
+| Raw JSON | 19/108 | 0 | 8 |
+| **ContextQuant** | **105/108** | **0** | **8–9** |
+| mcp-trunc-proxy | 93/108 | 6 | 18–25 |
 
-Both clients save results this large to a file, so without code execution the raw arm mostly never
-sees the data; the Claude models said so instead of guessing. Not yet measured: agents that can run
-`jq` on that file. Details and caveats in [notes/findings.md](notes/findings.md#5-agent-eval-on-live-github-data-2026-11-08).
+Agents that can run `jq` and `grep` on results (Claude Haiku, Claude Sonnet):
+
+| | Correct | Turns (Sonnet) | Seconds (Sonnet) | Cost, all runs |
+|---|---|---|---|---|
+| Raw JSON | 71/72 | 3.9 | 11 | **$1.22** |
+| ContextQuant | 71/72 | **2.7** | **8** | $2.97 |
+| mcp-trunc-proxy | 71/72 | 7.0 | 18 | $2.41 |
+
+Clients save results this large to a file. Without code execution the raw arm mostly never sees the
+data (the Claude models said so rather than guess); mcp-trunc-proxy's grep tool returns JSON lines
+without their record, and its 6 wrong answers all attach a fact to the wrong issue. With code
+execution, raw plus `jq` is as accurate and cheapest; ContextQuant is faster with fewer turns but costs
+more, because its ~8k-token result stays in context. Details: [notes/findings.md](notes/findings.md).
 
 **Agent behaviour, live GitHub (Gemini 3.8 Flash via agy, one run each)**
 
@@ -188,6 +200,8 @@ how clients handle oversized results today, related papers, other tools, and the
   [headroom](https://github.com/headroomlabs-ai/headroom) and [rtk](https://github.com/rtk-ai/rtk) cover those.
 - Small results. Under the budget and nothing to leave out, the original passes through.
 - Agents that need every field of every record every time. Use `skip` for those tools.
+- Coding agents with a shell, if cost is what you're after. Raw results saved to a file plus `jq` were
+  as accurate and about 2.4× cheaper in our eval; ContextQuant was faster and took fewer turns.
 
 ## Compared to
 
@@ -195,11 +209,15 @@ how clients handle oversized results today, related papers, other tools, and the
 |---|---|---|
 | **ContextQuant** | JSON tool results from any MCP server | Picks fields, prints shared values once, declares every cut, recovery tool |
 | [headroom](https://github.com/headroomlabs-ai/headroom) | All agent context: JSON, code, logs, history | Content-aware compressors, originals retrievable |
+| [mcp-trunc-proxy](https://github.com/marco-jardim/mcp_trunc_proxy) | Large MCP tool results | Stores them, returns head/tail lines and a grep/range tool |
 | [rtk](https://github.com/rtk-ai/rtk) | Shell command output | Per-command filters |
 | [TOON](https://github.com/toon-format/toon) | JSON in prompts | A more compact notation for the same data |
 | [mcp-compressor](https://github.com/atlassian-labs/mcp-compressor) | MCP tool descriptions and schemas | Shows a small tool surface first |
 
-These were not measured on the same payloads; numbers in each project's README use different data.
+On the same five GitHub searches (373,363 tokens raw), with defaults: ContextQuant 37,883 tokens,
+mcp-trunc-proxy 9,165 (about one issue visible, the rest behind its grep tool), headroom `compress()`
+312,290 (compressed two of the five, left three unchanged). rtk, TOON and mcp-compressor solve
+different problems and weren't run. Details: [notes/findings.md](notes/findings.md#3c-against-other-tools-same-five-searches-2026-11-09).
 
 ## Also in this repo
 

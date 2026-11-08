@@ -5,6 +5,11 @@
 //   cq    ContextQuant proxy, default settings (8,000-token budget, tuned for Claude Code)
 //   cq-6k ContextQuant with --budget 6000, small enough that agy keeps it inline (agy saves
 //         results over ~27k characters to a file; the default budget gives 23-28k)
+//   trunc mcp-trunc-proxy (a competitor: stores big results, returns a preview + retrieval tool)
+// By default the agent gets the MCP server only (no shell, no files). A "-shell" suffix (raw-shell,
+// cq-shell, trunc-shell; Claude backend only) also gives it Read, Grep and a Bash limited to
+// read-only text tools (jq, grep, head, tail, wc, sort, uniq, cat), so it can work on a result
+// the client saved to a file.
 // Questions and answers are derived from the raw payload in code and graded in code.
 //
 //   bun eval/github-agent.ts tasks
@@ -20,7 +25,9 @@ const ROOT = new URL("..", import.meta.url).pathname;
 const REPLAY = `${ROOT}bench/compare/replay-server.ts`;
 const OUT = `${ROOT}.claude/agent-eval/github`;
 const PAYLOADS = ["mcp-sdk-auth-bugs", "rust-bugs"];
-const ARMS = ["raw", "cq", "cq-6k"] as const;
+const ARMS = ["raw", "cq", "cq-6k", "trunc", "raw-shell", "cq-shell", "trunc-shell"] as const;
+const TRUNC_VERSION = "0.2.2";
+const SHELL_TOOLS =["jq", "grep", "head", "tail", "wc", "sort", "uniq", "cat"].map((c) => `Bash(${c}:*)`);
 type Arm = (typeof ARMS)[number];
 
 type Issue = { number: number; user: { login: string }; assignees?: { login: string }[]; labels: { name: string }[]; body: string | null };
@@ -80,7 +87,9 @@ export function grade(t: Task, answer: string): boolean {
   }
 }
 
-const prompt = (t: Task) => `You have an MCP server named "github". Use only that server; ignore any other MCP servers. Its tools are your only tools: shell commands and files are not available, so read and count results yourself.
+const prompt = (t: Task, shell: boolean) => `You have an MCP server named "github". Use only that server; ignore any other MCP servers. ${shell
+  ? "You also have Read, Grep, and Bash limited to jq, grep, head, tail, wc, sort, uniq and cat; use them on tool results, including results saved to a file. Other commands are not available."
+  : "Its tools are your only tools: shell commands and files are not available, so read and count results yourself."}
 Call search_issues once with q="${t.q}" and per_page=30. The question is about the issues that call returns (one page of up to 30).
 If something you need is not in a result, use a tool to get it or say it is not shown; do not guess.
 
@@ -90,15 +99,17 @@ Put the answer alone on the last line.`;
 type Row = {
   task: string; arm: Arm; rep: number; model: string; status: "ok" | "error"; correct?: boolean; answer?: string; error?: string;
   search_calls: number; more_calls: number; input_tokens: number; output_tokens: number; seconds: number; cost_usd?: number;
+  turns?: number;
 };
 
-// Claude Code in print mode with only the eval server and no built-in tools (no Read, no Bash),
-// the same "no code execution" condition as agy. User settings, hooks and plugins are skipped.
-async function runClaude(model: string, t: Task, ws: string, server: object, row: Row): Promise<string> {
+// Claude Code in print mode with only the eval server. Without shell: no built-in tools at all (the
+// same "no code execution" condition as agy). With shell: Read, Grep and the read-only Bash list.
+// User settings, hooks and plugins are skipped.
+async function runClaude(model: string, t: Task, ws: string, server: object, row: Row, shell: boolean): Promise<string> {
   writeFileSync(`${ws}/mcp.json`, JSON.stringify({ mcpServers: { github: server } }));
-  const p = Bun.spawn(["claude", "-p", prompt(t), "--model", model.slice("claude:".length), "--output-format", "json",
-    "--setting-sources", "", "--strict-mcp-config", "--mcp-config", `${ws}/mcp.json`, "--tools", "",
-    "--allowedTools", "mcp__github__search_issues,mcp__github__contextquant_more", "--no-session-persistence"],
+  const p = Bun.spawn(["claude", "-p", prompt(t, shell), "--model", model.slice("claude:".length), "--output-format", "json",
+    "--setting-sources", "", "--strict-mcp-config", "--mcp-config", `${ws}/mcp.json`, "--tools", shell ? "Read,Grep,Bash" : "",
+    "--allowedTools", ["mcp__github", ...(shell ? ["Read", "Grep", ...SHELL_TOOLS] : [])].join(","), "--no-session-persistence"],
     { cwd: ws, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [out, err] = [await new Response(p.stdout).text(), await new Response(p.stderr).text()];
   await p.exited;
@@ -108,15 +119,18 @@ async function runClaude(model: string, t: Task, ws: string, server: object, row
   row.input_tokens = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
   row.output_tokens = u.output_tokens ?? 0;
   row.cost_usd = j.total_cost_usd;
+  row.turns = j.num_turns;
   if (j.is_error) throw new Error(`claude error: ${String(j.result ?? err).replace(/\s+/g, " ").slice(0, 300)}`);
   return String(j.result ?? "").trim();
 }
 
-async function runAgy(model: string, t: Task, ws: string, server: object, row: Row): Promise<string> {
+async function runAgy(model: string, t: Task, ws: string, server: object, row: Row, shell: boolean): Promise<string> {
+  if (shell) throw new Error("shell arms need the Claude backend (agy can't limit shell to read-only commands)");
   mkdirSync(`${ws}/.agents`);
   writeFileSync(`${ws}/.agents/mcp_config.json`, JSON.stringify({ mcpServers: { github: server } }));
-  const settings = JSON.stringify({ permissions: { allow: ["mcp(github/search_issues)", "mcp(github/contextquant_more)"] } });
-  const p = Bun.spawn(["agy", "-p", prompt(t), "--model", model, "--output-format", "json", "--print-timeout", "600s",
+  const tools = ["search_issues", "contextquant_more", "proxy_artifact_get", "proxy_artifact_info", "proxy_artifact_list"];
+  const settings = JSON.stringify({ permissions: { allow: tools.map((x) => `mcp(github/${x})`) } });
+  const p = Bun.spawn(["agy", "-p", prompt(t, false), "--model", model, "--output-format", "json", "--print-timeout", "600s",
     "--disable-slash-commands", "--settings", settings], { cwd: ws, stdout: "pipe", stderr: "pipe" });
   const [out, err] = [await new Response(p.stdout).text(), await new Response(p.stderr).text()];
   await p.exited;
@@ -136,12 +150,14 @@ async function runOne(model: string, t: Task, arm: Arm, rep: number): Promise<Ro
   const ws = mkdtempSync(`${tmpdir()}/cq-gh-agent-`);
   const bun = process.execPath;
   const env = { PATH: process.env.PATH!, HOME: process.env.HOME!, REPLAY: t.payload, REPLAY_LOG: `${ws}/calls.jsonl` };
-  const server = arm === "raw"
-    ? { command: bun, args: [REPLAY], env }
-    : { command: "/bin/sh", args: ["-c", `exec "${bun}" "${ROOT}src/cli.ts" proxy${arm === "cq-6k" ? " --budget 6000" : ""} -- "${bun}" "${REPLAY}" 2>>"${ws}/proxy.log"`], env };
+  const shell = arm.endsWith("-shell");
+  const base = arm.replace(/-shell$/, "");
+  const server = base === "raw" ? { command: bun, args: [REPLAY], env }
+    : base === "trunc" ? { command: "/bin/sh", args: ["-c", `exec npx -y mcp-trunc-proxy@${TRUNC_VERSION} -- "${bun}" "${REPLAY}" 2>>"${ws}/proxy.log"`], env }
+    : { command: "/bin/sh", args: ["-c", `exec "${bun}" "${ROOT}src/cli.ts" proxy${base === "cq-6k" ? " --budget 6000" : ""} -- "${bun}" "${REPLAY}" 2>>"${ws}/proxy.log"`], env };
   const start = Date.now();
   try {
-    row.answer = await (model.startsWith("claude:") ? runClaude : runAgy)(model, t, ws, server, row);
+    row.answer = await (model.startsWith("claude:") ? runClaude : runAgy)(model, t, ws, server, row, shell);
     row.correct = grade(t, row.answer);
   } catch (e) {
     row.status = "error";
@@ -173,7 +189,7 @@ function load(file: string): Row[] {
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
-  options: { model: { type: "string" }, reps: { type: "string", default: "3" }, arms: { type: "string", default: ARMS.join(",") }, concurrency: { type: "string", default: "3" } },
+  options: { model: { type: "string" }, reps: { type: "string", default: "3" }, arms: { type: "string", default: "raw,cq,cq-6k" }, concurrency: { type: "string", default: "3" } },
 });
 
 if (!import.meta.main) {
@@ -202,14 +218,14 @@ if (!import.meta.main) {
     // Latest ok row per (task, arm, rep): retried errors don't count twice.
     const rows = [...new Map(load(`${OUT}/${model}/results.jsonl`).filter(finished).map((r) => [`${r.task}|${r.arm}|${r.rep}`, r])).values()];
     for (const r of rows) if (r.status === "ok") r.correct = grade(byTask.get(r.task)!, r.answer ?? ""); // regrade: grader fixes apply to old runs
-    console.log(`\n### ${model}\n\n| arm | correct | wrong | said not shown | no answer | recovery calls | input tokens (avg) | seconds (avg) | cost |\n|---|---|---|---|---|---|---|---|---|`);
+    console.log(`\n### ${model}\n\n| arm | correct | wrong | said not shown | no answer | recovery calls | turns (avg) | input tokens (avg) | seconds (avg) | cost |\n|---|---|---|---|---|---|---|---|---|---|`);
     for (const arm of ARMS) {
       const r = rows.filter((x) => x.arm === arm);
       if (!r.length) continue;
       const avg = (f: (x: Row) => number) => Math.round(r.reduce((s, x) => s + f(x), 0) / r.length);
       const right = r.filter((x) => x.correct).length, none = r.filter(noAnswer).length, abst = r.filter(abstained).length;
       const cost = r.reduce((s, x) => s + (x.cost_usd ?? 0), 0);
-      console.log(`| ${arm} | ${right}/${r.length} | ${r.length - right - none - abst} | ${abst} | ${none} | ${(r.reduce((s, x) => s + x.more_calls, 0) / r.length).toFixed(1)} | ${avg((x) => x.input_tokens).toLocaleString("en-US")} | ${avg((x) => x.seconds)} | ${cost ? `$${cost.toFixed(2)}` : "—"} |`);
+      console.log(`| ${arm} | ${right}/${r.length} | ${r.length - right - none - abst} | ${abst} | ${none} | ${(r.reduce((s, x) => s + x.more_calls, 0) / r.length).toFixed(1)} | ${r.some((x) => x.turns) ? (r.reduce((s, x) => s + (x.turns ?? 0), 0) / r.length).toFixed(1) : "—"} | ${avg((x) => x.input_tokens).toLocaleString("en-US")} | ${avg((x) => x.seconds)} | ${cost ? `$${cost.toFixed(2)}` : "—"} |`);
     }
     const wrong = rows.filter((x) => !x.correct && !noAnswer(x) && !abstained(x)).map((x) => `${x.arm} ${x.task}: "${x.answer?.slice(0, 80)}" (expected ${JSON.stringify(byTask.get(x.task)?.expect)})`);
     if (wrong.length) console.log(`\nWrong answers:\n${wrong.map((w) => `- ${w}`).join("\n")}`);
