@@ -139,6 +139,22 @@ export function shape(input: string, opts: ShapeOptions = {}): ShapeResult {
     while (n > 0 && tok.count(render(n)) > max) n--;
     text = render(n);
     for (let level = 1; level <= 2 && tok.count(text) > max; level++) text = render(n, level);
+    // One record bigger than the whole budget would never be shown, and the "more" hint would point
+    // back at the same offset forever. Show it with its long strings cut to fit, and say so.
+    // ponytail: cut-to-fit only; paging through one long field (a chars_from argument) if agents need the rest.
+    if (n === 0 && rest.length && opts.format !== "tsv") {
+      const row = rows[start] as Json;
+      const longest = longestString(row);
+      let [lo, hi] = [0, longest];
+      while (lo <= hi) {
+        const cap = (lo + hi) >> 1;
+        const line = JSON.stringify(mapStrings(row, (s) => (s.length > cap ? `${s.slice(0, cap)}…` : s)));
+        const note = `# record ${start + 1} is larger than the budget: text values cut to ${cap} characters (longest is ${longest})`;
+        const t = [...notes(1, 2), note, line].join("\n");
+        if (tok.count(t) <= max) [text, n, lo] = [t, 1, cap + 1];
+        else hi = cap - 1;
+      }
+    }
     // ponytail: last resort is one short line without meta; budgets under ~40 tokens still exceed it.
     if (tok.count(text) > max) {
       n = 0;
@@ -333,6 +349,13 @@ function metaValue(v: Json): string {
   const j = JSON.stringify(v);
   if (j.length <= 120 || !v || typeof v !== "object") return j;
   return Array.isArray(v) ? `[${v.length} items]` : `{${Object.keys(v).length} keys}`;
+}
+
+function longestString(v: Json): number {
+  if (typeof v === "string") return v.length;
+  if (Array.isArray(v)) return Math.max(0, ...v.map(longestString));
+  if (isObj(v)) return Math.max(0, ...Object.values(v).map(longestString));
+  return 0;
 }
 
 function mapStrings(v: Json, fn: (s: string) => string): Json {

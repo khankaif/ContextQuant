@@ -242,7 +242,10 @@ export async function runProxy(target: Upstream, cfg: ProxyConfig, version: stri
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const name = req.params.name;
-    if (name === MORE_TOOL && !upstreamHasMore) return more(req.params.arguments, cfg, store);
+    if (name === MORE_TOOL && !upstreamHasMore) {
+      console.error(`contextquant ${MORE_TOOL}: ${JSON.stringify(req.params.arguments ?? {})}`);
+      return more(req.params.arguments, cfg, store);
+    }
     const res = await upstream.request({ method: "tools/call", params: req.params }, CallToolResultSchema, slow);
     return shapeResult(res, name, cfg, store, outputSchema.get(name));
   });
