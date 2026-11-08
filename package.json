@@ -1,6 +1,6 @@
 {
   "name": "contextquant",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "MCP proxy that shrinks tool results for AI agents and says exactly what it cut, with a tool to get it back.",
   "license": "MIT",
   "repository": {
