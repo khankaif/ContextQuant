@@ -7,6 +7,10 @@ Wrap any stdio MCP server. Large JSON results (search hits, issues, CRM records)
 fields an agent can use, values shared by every record printed once, and a receipt for everything
 else. Nothing is dropped silently, so the agent doesn't have to guess.
 
+![Terminal recording: one GitHub search for 30 vscode bugs prints 82,843 tokens of raw JSON; the same search through ContextQuant prints 7,795 tokens, with notes saying what was cut and how to get it back](media/demo.gif)
+
+<sub>Real GitHub data, recorded with [vhs](https://github.com/charmbracelet/vhs) from <code>media/demo.tape</code>.</sub>
+
 The reference GitHub MCP server, one `search_issues` call (18 open auth bugs in
 `modelcontextprotocol/typescript-sdk`), no configuration:
 
@@ -125,11 +129,25 @@ All token counts use a real tokenizer (o200k), not a characters-per-token estima
 | Proxy, no config | reference GitHub MCP server, 30 issues (`oven-sh/bun` crashes) | 66,234 | 6,477 | 90.2% |
 | Proxy, no config | GitHub search, 30 issues (MCP SDK bugs) | 68,815 | 7,802 | 88.7% |
 | Proxy `--url`, no config | GitHub's hosted MCP server, 30 issues (MCP SDK bugs) | 70,393 | 7,749 | 89.0% |
+| Proxy, no config | 5 live searches × 30 issues (MCP SDK, bun, vscode, rust, next.js), replayed byte for byte (`bench/compare`) | 373,363 | 37,883 | 89.9% |
 | Built-in gateway, tuned fields | 30-issue pages from vscode, rust, go, bun, nacos | 46k–91k | 2.8k–3.9k | 93.9–95.7% |
 
 In the gateway runs a script compared every shown value (title, author, assignee, labels) and every
 count against GitHub's raw response: zero mismatches across six repositories. Shaping a 69k-token
 page takes about 120 ms, mostly token counting.
+
+**Agent eval, live GitHub results replayed** (`eval/github-agent.ts`: 12 questions graded in code, 3 runs each,
+agents with the MCP server only, no shell or file access)
+
+| Model (client) | Raw | ContextQuant | Made-up answers |
+|---|---|---|---|
+| Gemini 3.8 Flash (agy) | 19/36 | 33/36 | 0 |
+| Claude Haiku (Claude Code) | 0/36 | 36/36 | 0 |
+| Claude Sonnet (Claude Code) | 0/36 | 36/36 | 0 |
+
+Both clients save results this large to a file, so without code execution the raw arm mostly never
+sees the data; the Claude models said so instead of guessing. Not yet measured: agents that can run
+`jq` on that file. Details and caveats in [notes/findings.md](notes/findings.md#5-agent-eval-on-live-github-data-2026-11-08).
 
 **Agent behaviour, live GitHub (Gemini 3.8 Flash via agy, one run each)**
 
@@ -158,6 +176,11 @@ The 6 made-up answers are one trap: without the left-out note, Gemma answered "W
 with X's job title in every run; with the note it said the field wasn't shown. Caveats: synthetic data
 and 36 questions (about ±18 points for small differences). Raw run results aren't committed;
 `eval/run-all.sh` regenerates them under `.claude/hillclimb/` (needs model API keys in `.env`).
+
+## Research notes
+
+[`notes/`](notes/) has the measurements behind these numbers (including the approaches that failed),
+how clients handle oversized results today, related papers, other tools, and the experiments still to run.
 
 ## When to skip it
 
@@ -190,7 +213,7 @@ These were not measured on the same payloads; numbers in each project's README u
 ## Development
 
 ```bash
-bun test                 # 78 tests, including stress tests and an end-to-end proxy test
+bun test                 # 81 tests, including stress tests and an end-to-end proxy test
 bunx tsc --noEmit -p .
 bun run bench            # token comparison on the people fixture (incl. TOON)
 eval/run-all.sh          # accuracy eval; bun eval/summary.ts prints the tables

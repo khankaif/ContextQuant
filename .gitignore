@@ -20,7 +20,7 @@ GEMINI.md
 !.claude/hillclimb/**/errors.jsonl
 !.claude/hillclimb/*/_state.json
 !.claude/agent-eval/**/results.jsonl
-.claude/agent-eval/_discarded/
+.claude/agent-eval/_discarded*/
 
 # Large local payloads
 massive_payload.json
