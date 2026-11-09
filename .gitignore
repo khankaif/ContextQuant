@@ -1,58 +1,21 @@
 node_modules/
-
-# Local secrets (Bun loads .env automatically)
+dist/
 .env
 .env.*
 
-# Local working state: kept on disk, not in the repo
-.vibe-wise/
-docs/
-.legacy/_project.md
-.legacy/course_output/
-.legacy/skill.md
-GEMINI.md
+# Eval output: only results.jsonl (the runs behind the README numbers) is tracked.
+eval/results/**
+!eval/results/**/
+!eval/results/**/results.jsonl
+eval/results/_discarded*/
 
-# Eval output: only the small result files that back the README numbers are tracked.
-# Per-run traces, reference answers, progress and logs stay local.
-.claude/**
-!.claude/**/
-!.claude/hillclimb/**/results.jsonl
-!.claude/hillclimb/**/errors.jsonl
-!.claude/hillclimb/*/_state.json
-!.claude/agent-eval/**/results.jsonl
-.claude/agent-eval/_discarded*/
-
-# Large local payloads
-massive_payload.json
-payloads/
-data/
-*.payload.json
+# Captured payloads and local bench output
 bench/out/
+payloads/
 
-# Build outputs (Bun and the legacy C build)
-build/
-dist/
-contextquant_cli
-test_runner
-synthetic_json_gen
-*.out
-*.o
-*.obj
-*.d
-*.a
-*.so
-*.dylib
-
-# Coverage / profiling
-coverage/
-*.gcno
-*.gcda
-*.profraw
-*.profdata
-
-# Temp and editor files
-*.log
-*.tmp
+# Local tool and editor state
+.claude/
 .DS_Store
 .vscode/
 .idea/
+*.log

@@ -18,19 +18,17 @@ with confidence intervals and without raising cache-priced cost, this is a libra
 FastMCP middleware or a headroom contribution), not a standalone tool. That result would still be
 worth publishing.
 
-### Status (2026-11-09)
+### Status: stopped (2026-11-09)
 
-Done: no-shell and shell arms, raw / ContextQuant / mcp-trunc-proxy, token comparison incl. headroom
-([findings.md §3c, §5, §5b](findings.md)). The headline that survived: **for agents without code
-execution, ContextQuant is the only arm that is both right and never confidently wrong; with code
-execution, raw + jq is as accurate and cheaper, ContextQuant is faster.** Not done yet:
+The experiment ran ([findings.md §3c, §5, §5b, §5c](findings.md)) and gave a clear answer:
 
-- **Cut ContextQuant's cost when the agent has a shell.** The ~8k-token inline result is re-read every
-  turn. Options to test: a smaller default budget when the client can run code, or putting only the
-  receipt inline and the rows behind the handle. Measure with `--arms raw-shell,cq-shell`.
-- **Public benchmark questions** (MCP-Bench / MCP-Atlas) instead of my own 12.
-- **More models** via agy (Sonnet 4.6, GPT-OSS 120B) once its quota resets; the eval resumes.
-- **Cost for agy runs.** Claude Code reports `total_cost_usd`; agy doesn't.
+- **Agents without code execution:** ContextQuant is the only arm that is both right and never
+  confidently wrong (105/108, 0 wrong), and as fast as raw.
+- **Agents with a shell:** raw JSON plus `jq` is as accurate and about 2× cheaper. A smaller budget
+  doesn't close the gap (§5c). ContextQuant is only faster there.
+
+Active development has stopped at v0.3.1. The package works as published. The items below are what I'd
+pick up if the project restarted, not a roadmap.
 
 ## Open questions
 

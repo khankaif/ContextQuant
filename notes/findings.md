@@ -95,7 +95,9 @@ What fills the budget, looking at the output: `id` and `node_id` sit at the fron
 
 ## 4. Declaring cuts changes agent behaviour
 
-People-search eval: synthetic data, 36 questions × 3 runs per arm, graded in code (`eval/`).
+People-search eval: synthetic data, 36 questions × 3 runs per arm, graded in code. The harness was
+removed in the November cleanup (its raw results were never committed); it is in git history before
+the `cleanup` merge. Treat this section as an early signal; section 5 is the eval with committed results.
 
 | Arm | Tokens | Gemini 3.8 Flash | Gemma 4 26B | Made-up answers (Gemma) |
 |---|---|---|---|---|
@@ -207,6 +209,25 @@ Harness lessons, each found from a wrong grade and fixed before the numbers abov
 - Graders read the last line: one model put a two-number answer on two lines; another wrote "I can't
   say yes or no", which matched "yes". Fixed and covered in `test/github-grade.test.ts`.
 - Runs graded under a superseded task or grader are kept in `discarded-*.jsonl` next to the results.
+
+### 5c. A smaller budget doesn't fix the shell cost (2026-11-09)
+
+Haiku with the read-only shell, same 12 tasks. `cq-4k` and `cq-2k` run the proxy with `--budget 4000`
+and `--budget 2000`. Cache tokens are averages per run.
+
+| Arm | Correct | Cost per run | Turns | Cache write | Cache read |
+|---|---|---|---|---|---|
+| raw | 48/48 | **$0.0028** | 4.7 | 9.2k | 43k |
+| ContextQuant (8k) | 48/48 | $0.0051 | 2.9 | 22.4k | 32k |
+| ContextQuant 4k | 36/36 | $0.0045 | 4.3 | 17.5k | 55k |
+| ContextQuant 2k | 35/36 | $0.0046 | 5.7 | 15.6k | 79k |
+
+The cost driver is the cache write: whatever enters the context gets written to the prompt cache
+once (more expensive than plain input), then read on every later turn. Raw stays cheap because the
+result goes to a file and never enters the context. A smaller budget shrinks the write but makes the
+agent call `contextquant_more` for the rows it cut, so turns and cache reads rise and the saving is
+gone. Conclusion: with a shell, keeping data out of the context beats compressing it into the context.
+Not pursued further.
 
 ## 6. Bugs that taught me something
 

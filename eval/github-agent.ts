@@ -1,5 +1,5 @@
 // Agent eval on captured live GitHub search results (bench/compare/capture.ts).
-// An agy agent answers questions about one search page; the only thing that changes between
+// An agent (agy or Claude Code) answers questions about one search page; the only thing that changes between
 // arms is what sits between the agent and the replayed GitHub server:
 //   raw   the reference server's JSON, untouched
 //   cq    ContextQuant proxy, default settings (8,000-token budget, tuned for Claude Code)
@@ -15,7 +15,7 @@
 //   bun eval/github-agent.ts tasks
 //   bun eval/github-agent.ts run --model gemini-3.8-flash-low [--reps 3] [--arms raw,cq,cq-6k] [--concurrency 3]
 //   bun eval/github-agent.ts summary
-// Results: .claude/agent-eval/github/<model>/results.jsonl (finished runs are skipped on re-run).
+// Results: eval/results/github/<model>/results.jsonl (finished runs are skipped on re-run).
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { parseArgs } from "node:util";
@@ -23,7 +23,7 @@ import { QUERIES } from "../bench/compare/queries.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const REPLAY = `${ROOT}bench/compare/replay-server.ts`;
-const OUT = `${ROOT}.claude/agent-eval/github`;
+const OUT = `${ROOT}eval/results/github`;
 const PAYLOADS = ["mcp-sdk-auth-bugs", "rust-bugs"];
 // cq-<n>k runs ContextQuant with --budget <n>000.
 const ARMS = ["raw", "cq", "cq-6k", "cq-4k", "cq-2k", "trunc", "raw-shell", "cq-shell", "cq-4k-shell", "cq-2k-shell", "trunc-shell"] as const;

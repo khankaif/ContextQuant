@@ -125,16 +125,14 @@ describe("cq proxy end to end", () => {
     const client = new Client({ name: "test", version: "0" });
     await client.connect(new StdioClientTransport({
       command: process.execPath,
-      args: ["src/cli.ts", "proxy", "--budget", "1500", "--", process.execPath, "eval/mcp-server.ts"],
-      env: { ...process.env, CQ_VARIANT: "raw" } as Record<string, string>,
+      args: ["src/cli.ts", "proxy", "--budget", "1500", "--", process.execPath, "test/fixture-server.ts"],
       stderr: "pipe",
     }));
     try {
       const tools = (await client.listTools()).tools.map((t) => t.name);
       expect(tools).toEqual(["person_search", MORE_TOOL]);
 
-      const filters = { field: "basic_profile.name", type: "!=", value: "nobody" };
-      const first = text(await client.callTool({ name: "person_search", arguments: { filters } }));
+      const first = text(await client.callTool({ name: "person_search", arguments: {} }));
       expect(o200k.count(first)).toBeLessThanOrEqual(1_500);
       const hint = first.match(/handle="(r\d+)" and offset=(\d+)/)!;
       expect(hint).not.toBeNull();

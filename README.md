@@ -1,97 +1,118 @@
 # ContextQuant
 
-**An MCP proxy that shrinks tool results for AI agents, says exactly what it cut, and gives the agent
-a tool to get it back.**
-
-Wrap any stdio MCP server. Large JSON results (search hits, issues, CRM records) come back with the
-fields an agent can use, values shared by every record printed once, and a receipt for everything
-else. Nothing is dropped silently, so the agent doesn't have to guess.
+An MCP proxy that shrinks large JSON tool results before they reach an AI agent. It tells the agent
+exactly what it cut, and gives it a tool to get the cut parts back.
 
 ![Terminal recording: one GitHub search for 30 vscode bugs prints 82,843 tokens of raw JSON; the same search through ContextQuant prints 7,795 tokens, with notes saying what was cut and how to get it back](media/demo.gif)
 
 <sub>Real GitHub data, recorded with [vhs](https://github.com/charmbracelet/vhs) from <code>media/demo.tape</code>.</sub>
 
-The reference GitHub MCP server, one `search_issues` call (18 open auth bugs in
-`modelcontextprotocol/typescript-sdk`), no configuration:
+## The problem
+
+MCP tools often return far more than the agent needs. One GitHub `search_issues` call for 30 issues is
+about 70,000 tokens: every issue body, about 60 API links per issue, and the same author metadata
+repeated 30 times. To answer "which open auth bugs are unassigned?" the agent needs four fields:
+number, title, labels and assignee.
+
+Clients deal with oversized results in one of three ways, and all three hurt:
+
+| What the client does | What goes wrong |
+|---|---|
+| Puts the whole result in context | Fills the context window; every later turn re-reads it |
+| Truncates it, or keeps only some fields | The agent can't tell what's missing, so it guesses or searches again |
+| Saves it to a file | Fine if the agent can run code (`jq`); otherwise it never sees the data |
+
+ContextQuant takes a fourth approach: **cut the result down, and declare every cut.**
+
+## How it works
+
+ContextQuant sits between the agent and any MCP server. Tool calls pass through unchanged; only the
+results are rewritten.
 
 ```
-raw server:      37,903 tokens
-through cq:       5,556 tokens  (−85.3%, all 18 issues shown)
+agent (Claude Code, any MCP client)
+   │   tool call ──────────────► passes through unchanged
+   ▼
+ContextQuant proxy ──────────────► wrapped MCP server (GitHub, Jira, a database…)
+   │   ◄─────────────────────────  70k-token JSON result
+   │
+   │   1. find the list of records in the JSON
+   │   2. pick the fields worth keeping (short values stay; long text and API links go)
+   │   3. print fields that are the same in every record once, not 30 times
+   │   4. fit as many records as the token budget allows (default 8,000)
+   │   5. write a header saying what was left out and how to get it
+   │   6. keep the original in memory under a handle, e.g. "r1"
+   ▼
+agent reads ~6k tokens, and can call contextquant_more("r1", …) for anything cut
 ```
+
+What the agent reads for 18 GitHub issues (37,903 tokens raw, 5,556 through ContextQuant):
 
 ```
 # contextquant: handle="r1" holds the full response · contextquant_more(handle, offset, fields) returns cut records or left-out fields
-# search_issues: showing 18 of 18 · total_count=18 · incomplete_results=false · search_type="lexical"
-# same in every record: user.type="User" · user.user_view_type="public" · user.site_admin=false · state="open" · locked=false · …
-# empty (null) in every record: closed_at, type, active_lock_reason, state_reason, milestone.due_on, …
-# a field missing from a row is empty (null) in that record
+# search_issues: showing 18 of 18 · total_count=18 · incomplete_results=false
+# same in every record: user.type="User" · state="open" · locked=false · …
+# empty (null) in every record: closed_at, milestone, …
 # left out fields: body, +66 URL/ID fields
-{"html_url":"https://github.com/modelcontextprotocol/typescript-sdk/issues/2510","id":4908917026,"node_id":"I_kwDOM2nl2s8AAAABJJghIg","number":2510,"title":"Mid-session re-auth after refresh-token expiry dead-ends: …","user":{"login":"evdbogaard",…},"labels":[{"name":"bug",…},…],…}
+{"html_url":"https://github.com/modelcontextprotocol/typescript-sdk/issues/2510","number":2510,"title":"Mid-session re-auth after refresh-token expiry dead-ends: …","labels":[{"name":"bug",…}],…}
 …
 ```
 
-## What it's for
+Each header line tells the agent something it would otherwise have to guess:
 
-Any MCP tool that returns a JSON list of records, where an agent needs a few fields from many rows:
+| Line | What it tells the agent |
+|---|---|
+| `showing 18 of 18` | How many records came back and how many are shown |
+| `same in every record: …` | Values shared by all records, printed once; nothing is missing |
+| `empty (null) in every record: …` | Fields that exist but are empty, so "nobody is assigned" is an answer, not a gap |
+| `left out fields: body, …` | Fields removed from the rows; `contextquant_more(handle, fields=["number","body"])` returns them |
+| `12 records not shown · call contextquant_more with handle="r1" and offset=18` | Records cut to fit the budget, with the exact call for the next page |
 
-- **Issue and ticket triage**: GitHub, Jira, Linear or Sentry searches. "Which open auth bugs are unassigned?"
-  needs number, title, labels and assignee, not 30 issue bodies and 60 API links per issue.
-- **People and company search**: CRM and enrichment APIs (HubSpot, Apollo-style search) return 50+
-  fields per profile; the agent filters on five.
-- **Database and log queries**: `SELECT *` style results from SQL or observability MCP servers,
-  where most columns repeat or are empty.
-- **Long agent sessions**: every result stays under Claude Code's 10,000-token warning, so a session
-  makes more calls before its context fills up.
+**Why declaring the cuts matters.** A model that can't see a field and isn't told it was removed tends
+to fill the gap with something plausible. In testing, a model asked for a person's "headline" answered
+with their job title every time when the field had been dropped silently, and said "not shown" when
+the cut was declared. The header turns a silent gap into a known one.
 
-Each cut is declared, so the agent doesn't hallucinate a field it can't see (see Measured), and
-`contextquant_more` gets the next page or a left-out field in one call.
+Results that aren't a list of records (plain text, single objects, errors), results that wouldn't get
+smaller, and results with a declared output schema pass through untouched.
+
+## Use cases
+
+It fits any tool that returns **many records when the agent needs a few fields from each**:
+
+- **Issue and ticket triage.** GitHub, Jira, Linear or Sentry searches: "which open bugs are unassigned?"
+- **CRM and people search.** HubSpot or enrichment APIs return 50+ fields per profile; the agent filters on five.
+- **Database and log queries.** `SELECT *`-style results where most columns repeat or are empty.
+- **Agents that can't run code.** Chat apps, connectors and hosted agents can't `jq` a saved file.
+  This is where ContextQuant measured best (see Results).
+
+It doesn't fit:
+
+- **Prose, code or logs.** It only works on JSON lists of records.
+- **Coding agents with a shell, if cost is the goal.** Raw results saved to a file plus `jq` were as
+  accurate and about 2× cheaper. ContextQuant was faster there, but not cheaper.
+- **Tools whose every field is needed every time.** Mark them `skip` in the config.
 
 ## Quick start
 
-Needs Node 20+. No install step: `npx` fetches it.
+Needs Node 20+. Put ContextQuant in front of any MCP server's own command:
 
 ```bash
-# Claude Code: wrap any MCP server by putting it after --
-# (the token is needed for private repositories and write tools; public read-only search works without it)
 claude mcp add --env GITHUB_PERSONAL_ACCESS_TOKEN=ghp_... github-cq \
   -- npx -y contextquant proxy -- npx -y @modelcontextprotocol/server-github
 ```
 
-Any MCP client works the same way: the command is `npx -y contextquant proxy -- <the server's own command>`.
-
-From source (needs [Bun](https://bun.sh) 1.1+): `git clone https://github.com/khankaif/ContextQuant.git && cd ContextQuant && bun install`, then use `bun src/cli.ts` in place of `npx -y contextquant`.
-
-Remote (Streamable HTTP) servers are wrapped with `--url`, e.g. GitHub's hosted MCP server:
+Any MCP client works the same way: `npx -y contextquant proxy -- <the server's command>`.
+Remote (HTTP) servers use `--url`:
 
 ```bash
-claude mcp add github-cq -- bun "$PWD/src/cli.ts" proxy \
-  --url https://api.githubcopilot.com/mcp/ --header "Authorization: Bearer ghp_..."
+npx -y contextquant proxy --url https://api.githubcopilot.com/mcp/ --header "Authorization: Bearer ghp_..."
 ```
 
-Environment variables (API tokens) are passed through to the wrapped server. Each shaped call
-logs its saving to stderr: `contextquant search_issues: 37903 → 5556 tokens (o200k)`.
+Environment variables (API tokens) pass through to the wrapped server. Each shaped call logs its
+saving to stderr, e.g. `contextquant search_issues: 37903 → 5556 tokens (o200k)`.
 
-## What the agent sees
-
-| Line | Meaning | What the agent can do |
-|---|---|---|
-| `showing 18 of 18` | Records in this response, and how many are shown | — |
-| `same in every record: …` | Fields with one value across all records, printed once | Read them; nothing is missing |
-| `empty (null) in every record: …` | Fields that exist but hold no value anywhere | Treat as empty (e.g. nobody assigned), not as hidden |
-| `left out fields: body, …` | Fields left out of the rows | `contextquant_more(handle, fields=["number","body"])` |
-| `12 records not shown · call contextquant_more with handle="r1" and offset=18` | Records cut to fit the token budget, with the exact next offset | Call it as written |
-| `count by labels.name: bug 20 · crash 10` | Value counts over all records (when configured) | Read the count instead of counting rows |
-
-Fields are chosen from the data itself when a tool isn't configured: short values stay; long text
-(over ~200 characters on average), API self-links, image URLs and ids nested inside sub-objects are
-left out. Top-level ids and human-facing links stay, because agents pass them to the next call. The
-rules can be aggressive because every cut is declared and one call away.
-
-Results that aren't a JSON list of records (plain text, single objects, images, errors) pass through
-unchanged, as do results that wouldn't get smaller and results whose tool declares an output schema
-(their `structuredContent` must stay as the server sent it).
-
-## Configure (optional)
+## Configuration (optional)
 
 ```bash
 npx -y contextquant proxy --budget 8000 --config contextquant.json -- <server command>
@@ -104,142 +125,108 @@ npx -y contextquant proxy --budget 8000 --config contextquant.json -- <server co
   "keep_responses": 50,
   "timeout_seconds": 600,
   "tools": {
-    "search_issues": { "fields": ["number", "title", "state", "labels.name", "assignee.login"], "counts": ["labels.name", "assignee.login"] },
+    "search_issues": { "fields": ["number", "title", "labels.name", "assignee.login"], "counts": ["labels.name"] },
     "get_file_contents": { "skip": true }
   }
 }
 ```
 
-The default budget is 8,000 tokens per result (o200k), aiming under Claude Code's 10,000-token
-warning; Claude's own tokenizer counts somewhat differently, so lower it if you see the warning.
-Per-tool `fields` replaces the automatic choice, `counts` adds value counts, `skip` passes a tool through.
-`long_text_chars` (global or per tool) is the average length above which a text field counts as long and is
-left out; `keep_responses` is how many original responses `contextquant_more` can still reach;
-`timeout_seconds` is how long a call to the wrapped server may take. The values above are the defaults.
+| Key | Meaning (values above are the defaults) |
+|---|---|
+| `budget_tokens` | Max tokens per result. 8,000 keeps it under Claude Code's 10,000-token warning |
+| `long_text_chars` | Text fields averaging more characters than this are left out |
+| `keep_responses` | How many original responses `contextquant_more` can still reach |
+| `tools.<name>.fields` | Fields to keep for that tool, replacing the automatic choice |
+| `tools.<name>.counts` | Adds value counts over all records, so the agent reads counts instead of counting rows |
+| `tools.<name>.skip` | Pass that tool's results through unchanged |
 
-## Measured
+## Results
 
-All token counts use a real tokenizer (o200k), not a characters-per-token estimate.
+Token counts use a real tokenizer (o200k). All data is live GitHub results, captured once and replayed
+byte for byte so every option sees the same input.
 
-**Token savings, live GitHub data**
+**Size.** Five searches of 30 issues each (MCP SDK, bun, vscode, rust, next.js):
 
-| Setup | Payload | Raw | ContextQuant | Saved |
-|---|---|---|---|---|
-| Proxy, no config | reference GitHub MCP server, 18 issues | 37,903 | 5,556 | 85.3% |
-| Proxy, no config | reference GitHub MCP server, 30 issues (`oven-sh/bun` crashes) | 66,234 | 6,477 | 90.2% |
-| Proxy, no config | GitHub search, 30 issues (MCP SDK bugs) | 68,815 | 7,802 | 88.7% |
-| Proxy `--url`, no config | GitHub's hosted MCP server, 30 issues (MCP SDK bugs) | 70,393 | 7,749 | 89.0% |
-| Proxy, no config | 5 live searches × 30 issues (MCP SDK, bun, vscode, rust, next.js), replayed byte for byte (`bench/compare`) | 373,363 | 37,883 | 89.9% |
-| Built-in gateway, tuned fields | 30-issue pages from vscode, rust, go, bun, nacos | 46k–91k | 2.8k–3.9k | 93.9–95.7% |
+| | Tokens | Facts visible to the agent |
+|---|---|---|
+| Raw JSON | 373,363 | 100% |
+| ContextQuant | 37,883 (−90%) | 90%; the rest declared and one call away |
+| [mcp-trunc-proxy](https://github.com/marco-jardim/mcp_trunc_proxy) | 9,165 | ~3%; the rest behind its grep tool |
+| [headroom](https://github.com/headroomlabs-ai/headroom) | 312,290 | 99%; compressed 2 of the 5 |
 
-In the gateway runs a script compared every shown value (title, author, assignee, labels) and every
-count against GitHub's raw response: zero mismatches across six repositories. Shaping a 69k-token
-page takes about 120 ms, mostly token counting.
+**Accuracy.** 12 questions about two of those searches, graded in code, 3 runs each, on Claude Haiku,
+Claude Sonnet and Gemini 3.8 Flash (`eval/github-agent.ts`, results in `eval/results/`).
 
-**Agent eval, live GitHub results replayed** (`eval/github-agent.ts`: 12 questions graded in code, 3 runs each,
-against raw JSON and [mcp-trunc-proxy](https://github.com/marco-jardim/mcp_trunc_proxy) 0.2.2)
+Agent with only the MCP tool (no shell):
 
-Agents with the MCP server only, no shell or file access (Gemini 3.8 Flash, Claude Haiku, Claude Sonnet):
+| | Correct | Confidently wrong |
+|---|---|---|
+| Raw JSON | 19/108 | 0 (the client saved the result to a file the agent couldn't read) |
+| **ContextQuant** | **105/108** | **0** |
+| mcp-trunc-proxy | 93/108 | 6 (its grep returns JSON lines without saying which record they belong to) |
 
-| | Correct | Confidently wrong | Seconds per question (Claude) |
+Agent with a read-only shell (`jq`, `grep`, `head`…), Claude only:
+
+| | Correct | Turns (Sonnet) | Cost, all runs |
 |---|---|---|---|
-| Raw JSON | 19/108 | 0 | 8 |
-| **ContextQuant** | **105/108** | **0** | **8–9** |
-| mcp-trunc-proxy | 93/108 | 6 | 18–25 |
+| Raw JSON | 71/72 | 3.9 | **$1.22** |
+| ContextQuant | 71/72 | **2.7** | $2.97 |
+| mcp-trunc-proxy | 71/72 | 7.0 | $2.41 |
 
-Agents that can run `jq` and `grep` on results (Claude Haiku, Claude Sonnet):
+With a shell, raw is cheapest: the big result stays in a file and `jq` pulls out only what's needed,
+while ContextQuant's ~8k tokens sit in the context and are re-read every turn. A smaller budget didn't
+fix that. Small sample (my own 12 questions); full numbers and caveats in [notes/findings.md](notes/findings.md).
 
-| | Correct | Turns (Sonnet) | Seconds (Sonnet) | Cost, all runs |
-|---|---|---|---|---|
-| Raw JSON | 71/72 | 3.9 | 11 | **$1.22** |
-| ContextQuant | 71/72 | **2.7** | **8** | $2.97 |
-| mcp-trunc-proxy | 71/72 | 7.0 | 18 | $2.41 |
-
-Clients save results this large to a file. Without code execution the raw arm mostly never sees the
-data (the Claude models said so rather than guess); mcp-trunc-proxy's grep tool returns JSON lines
-without their record, and its 6 wrong answers all attach a fact to the wrong issue. With code
-execution, raw plus `jq` is as accurate and cheapest; ContextQuant is faster with fewer turns but costs
-more, because its ~8k-token result stays in context. Details: [notes/findings.md](notes/findings.md).
-
-**Agent behaviour, live GitHub (Gemini 3.8 Flash via agy, one run each)**
-
-"List the open auth bugs and who is assigned" (18 issues; exactly one is assigned):
-
-| Tool output | Correct | Tool calls | Input tokens | Time |
-|---|---|---|---|---|
-| Raw JSON | yes | 3 | 84,271 | 71 s |
-| Fields only, cuts not declared | yes | 10 | 52,226 | 115 s |
-| ContextQuant | yes | 1 | 29,990 | 54 s |
-
-With fields dropped silently, the agent didn't make anything up; it searched for what was missing,
-including guessing assignee names in queries. Four more questions (a page-1 count that isn't the
-total, the oldest bug beyond page 1, an empty result, a field only in an issue body) were all answered
-correctly through ContextQuant. These are spot checks, not a benchmark: one model, one run per question.
-
-**Accuracy, people-search eval** (synthetic data, 36 questions × 3 runs per arm, graded in code, `eval/`)
-
-| | Tokens | Gemini 3.8 Flash | Gemma 4 26B | count questions (Flash) | made-up answers (Gemma) |
-|---|---|---|---|---|---|
-| minified JSON (full response) | 30,320 | 92% | doesn't fit (free tier: 16k tokens/min) | 61% | — |
-| query fields only (API `fields`) | 5,394 | 97% | 94% | 83% | **6** |
-| **cq json** | 5,693 | **100%** | **100%** | **100%** | **0** |
-
-The 6 made-up answers are one trap: without the left-out note, Gemma answered "What is X's headline?"
-with X's job title in every run; with the note it said the field wasn't shown. Caveats: synthetic data
-and 36 questions (about ±18 points for small differences). Raw run results aren't committed;
-`eval/run-all.sh` regenerates them under `.claude/hillclimb/` (needs model API keys in `.env`).
-
-## Research notes
-
-[`notes/`](notes/) has the measurements behind these numbers (including the approaches that failed),
-how clients handle oversized results today, related papers, other tools, and the experiments still to run.
-
-## When to skip it
-
-- Results that are prose, code, or logs. ContextQuant works on JSON lists of records; tools like
-  [headroom](https://github.com/headroomlabs-ai/headroom) and [rtk](https://github.com/rtk-ai/rtk) cover those.
-- Small results. Under the budget and nothing to leave out, the original passes through.
-- Agents that need every field of every record every time. Use `skip` for those tools.
-- Coding agents with a shell, if cost is what you're after. Raw results saved to a file plus `jq` were
-  as accurate and about 2.4× cheaper in our eval; ContextQuant was faster and took fewer turns.
-
-## Compared to
+## Compared to other tools
 
 | | What it reduces | How |
 |---|---|---|
 | **ContextQuant** | JSON tool results from any MCP server | Picks fields, prints shared values once, declares every cut, recovery tool |
+| [mcp-trunc-proxy](https://github.com/marco-jardim/mcp_trunc_proxy) | Large MCP tool results | Stores them, returns head/tail lines and a grep tool |
 | [headroom](https://github.com/headroomlabs-ai/headroom) | All agent context: JSON, code, logs, history | Content-aware compressors, originals retrievable |
-| [mcp-trunc-proxy](https://github.com/marco-jardim/mcp_trunc_proxy) | Large MCP tool results | Stores them, returns head/tail lines and a grep/range tool |
 | [rtk](https://github.com/rtk-ai/rtk) | Shell command output | Per-command filters |
 | [TOON](https://github.com/toon-format/toon) | JSON in prompts | A more compact notation for the same data |
-| [mcp-compressor](https://github.com/atlassian-labs/mcp-compressor) | MCP tool descriptions and schemas | Shows a small tool surface first |
 
-On the same five GitHub searches (373,363 tokens raw), with defaults: ContextQuant 37,883 tokens,
-mcp-trunc-proxy 9,165 (about one issue visible, the rest behind its grep tool), headroom `compress()`
-312,290 (compressed two of the five, left three unchanged). rtk, TOON and mcp-compressor solve
-different problems and weren't run. Details: [notes/findings.md](notes/findings.md#3c-against-other-tools-same-five-searches-2026-11-09).
+## Code map
 
-## Also in this repo
+```
+src/
+  proxy.ts      MCP proxy: wraps a server, shapes each result, serves contextquant_more
+  shape.ts      the core: records → kept fields → budget → header + rows
+  auto.ts       automatic field choice (what counts as long text or a machine link)
+  ids.ts        shortens opaque IDs (UUIDs, hashes) to aliases like @1
+  tokens.ts     token counting (o200k / cl100k)
+  cli.ts        command line: proxy, gateway, shape, bench
+  gateway/      a built-in MCP server with hand-tuned GitHub, Jira and HubSpot tools
+  adapters/     per-API rendering for the gateway (Jira and HubSpot tested against fixtures only)
+bench/compare/  capture live GitHub results, replay them, compare tools by tokens
+eval/           agent accuracy eval on the replayed results
+notes/          measurements, research and what failed
+```
 
-- **Built-in gateway** (`npx -y contextquant gateway`): GitHub issues, Jira and HubSpot CRM tools with hand-tuned
-  fields, counts and detail tools. GitHub needs no token for public repositories (`GITHUB_TOKEN` raises
-  rate limits); Jira and HubSpot need credentials and have only been tested against fixtures.
-- **Library**: `import { shape, shapeToolText } from "./src/index.ts"`, e.g.
-  `shape(responseText, { fields: "auto", maxTokens: 4000 })`.
-- **CLI**: `npx -y contextquant shape <file> --fields a,b.c --max-tokens 1500`, `npx -y contextquant bench`.
+Also usable as a library: `shape(responseText, { fields: "auto", maxTokens: 4000 })` from `src/index.ts`.
 
 ## Development
 
+Needs [Bun](https://bun.sh) 1.1+.
+
 ```bash
-bun test                 # 81 tests, including stress tests and an end-to-end proxy test
+bun install
+bun test                     # unit, stress and end-to-end proxy tests
 bunx tsc --noEmit -p .
-bun run bench            # token comparison on the people fixture (incl. TOON)
-eval/run-all.sh          # accuracy eval; bun eval/summary.ts prints the tables
+bun run bench                # token comparison on a synthetic people fixture
+bun bench/compare/capture.ts && bun bench/compare/compare.ts   # live GitHub comparison
 ```
 
-v1 was a C dictionary compressor ([`only-c` branch](https://github.com/khankaif/ContextQuant/tree/only-c)). Measured with real tokenizers it saved
-nothing (−4.2% cl100k, +1.6% o200k): rare symbols cost more tokens than the words they replaced.
-That result is why this version picks fields instead of compressing text.
+## Status
+
+Finished at v0.3.1. The question it set out to answer (does declaring cuts beat sending everything or
+cutting silently?) has an answer: yes for agents that can't run code, no for cost when they can. See
+[notes/next.md](notes/next.md) for what a restart would pick up.
+
+The first version was a C dictionary compressor ([`only-c` branch](https://github.com/khankaif/ContextQuant/tree/only-c)).
+Measured with real tokenizers it saved nothing, because rare symbols cost more tokens than the words
+they replaced. That is why this version removes fields instead of compressing text.
 
 ## License
 
