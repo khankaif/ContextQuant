@@ -25,7 +25,8 @@ const ROOT = new URL("..", import.meta.url).pathname;
 const REPLAY = `${ROOT}bench/compare/replay-server.ts`;
 const OUT = `${ROOT}.claude/agent-eval/github`;
 const PAYLOADS = ["mcp-sdk-auth-bugs", "rust-bugs"];
-const ARMS = ["raw", "cq", "cq-6k", "trunc", "raw-shell", "cq-shell", "trunc-shell"] as const;
+// cq-<n>k runs ContextQuant with --budget <n>000.
+const ARMS = ["raw", "cq", "cq-6k", "cq-4k", "cq-2k", "trunc", "raw-shell", "cq-shell", "cq-4k-shell", "cq-2k-shell", "trunc-shell"] as const;
 const TRUNC_VERSION = "0.2.2";
 const SHELL_TOOLS =["jq", "grep", "head", "tail", "wc", "sort", "uniq", "cat"].map((c) => `Bash(${c}:*)`);
 type Arm = (typeof ARMS)[number];
@@ -99,7 +100,7 @@ Put the answer alone on the last line.`;
 type Row = {
   task: string; arm: Arm; rep: number; model: string; status: "ok" | "error"; correct?: boolean; answer?: string; error?: string;
   search_calls: number; more_calls: number; input_tokens: number; output_tokens: number; seconds: number; cost_usd?: number;
-  turns?: number;
+  turns?: number; cache_write?: number; cache_read?: number;
 };
 
 // Claude Code in print mode with only the eval server. Without shell: no built-in tools at all (the
@@ -120,6 +121,8 @@ async function runClaude(model: string, t: Task, ws: string, server: object, row
   row.output_tokens = u.output_tokens ?? 0;
   row.cost_usd = j.total_cost_usd;
   row.turns = j.num_turns;
+  // Billed differently: cache writes cost more than plain input, cache reads a tenth of it.
+  [row.cache_write, row.cache_read] = [u.cache_creation_input_tokens ?? 0, u.cache_read_input_tokens ?? 0];
   if (j.is_error) throw new Error(`claude error: ${String(j.result ?? err).replace(/\s+/g, " ").slice(0, 300)}`);
   return String(j.result ?? "").trim();
 }
@@ -154,7 +157,7 @@ async function runOne(model: string, t: Task, arm: Arm, rep: number): Promise<Ro
   const base = arm.replace(/-shell$/, "");
   const server = base === "raw" ? { command: bun, args: [REPLAY], env }
     : base === "trunc" ? { command: "/bin/sh", args: ["-c", `exec npx -y mcp-trunc-proxy@${TRUNC_VERSION} -- "${bun}" "${REPLAY}" 2>>"${ws}/proxy.log"`], env }
-    : { command: "/bin/sh", args: ["-c", `exec "${bun}" "${ROOT}src/cli.ts" proxy${base === "cq-6k" ? " --budget 6000" : ""} -- "${bun}" "${REPLAY}" 2>>"${ws}/proxy.log"`], env };
+    : { command: "/bin/sh", args: ["-c", `exec "${bun}" "${ROOT}src/cli.ts" proxy${/^cq-\d+k$/.test(base) ? ` --budget ${parseInt(base.slice(3)) * 1000}` : ""} -- "${bun}" "${REPLAY}" 2>>"${ws}/proxy.log"`], env };
   const start = Date.now();
   try {
     row.answer = await (model.startsWith("claude:") ? runClaude : runAgy)(model, t, ws, server, row, shell);
